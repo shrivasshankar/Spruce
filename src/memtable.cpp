@@ -26,3 +26,19 @@ lsm::MemTable::GetSorted() const {
   }
   return out;
 }
+
+size_t lsm::MemTable::SizeBytes() const {
+    size_t total = 0;
+    for (const auto& [key, value] : data_) {
+        total += key.size();
+        if (value) {
+            total += value->size();
+        }
+    }
+    return total;
+}
+
+bool lsm::MemTable::IsFull() const {
+    constexpr size_t kMaxMemTableBytes = 4 * 1024 * 1024;
+    return SizeBytes() >= kMaxMemTableBytes;
+}

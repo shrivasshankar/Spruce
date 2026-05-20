@@ -14,6 +14,8 @@ class MemTable {
   std::optional<std::string> Get(std::string_view key) const;
   void Delete(std::string key);
   std::vector<std::pair<std::string, std::optional<std::string>>> GetSorted() const;
+  size_t SizeBytes() const;
+  bool IsFull() const;
  private:
     std::map<std::string, std::optional<std::string>> data_;
 

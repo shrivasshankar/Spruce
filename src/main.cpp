@@ -38,6 +38,21 @@ int main() {
     }
     }
 
+    if (mt.SizeBytes() == 0) {
+        std::cerr << "fail: empty size\n";
+        return 1;
+      }
+    if (mt.IsFull()) {  // should not be full
+        std::cerr << "fail: should not be full\n";
+        return 1;
+    }
+
+    lsm::MemTable empty;
+    if (empty.SizeBytes() != 0 || empty.IsFull()) {
+    std::cerr << "fail: empty memtable\n";
+    return 1;
+    }
+
     std::cout << "memtable ok\n";
     return 0;
 
