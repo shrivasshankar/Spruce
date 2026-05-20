@@ -15,3 +15,14 @@ std::optional<std::string> lsm::MemTable::Get(std::string_view key) const {
 void lsm::MemTable::Delete(std::string key) {
     data_[std::move(key)] = std::nullopt;
 }
+
+std::vector<std::pair<std::string, std::optional<std::string>>>
+lsm::MemTable::GetSorted() const {
+  std::vector<std::pair<std::string, std::optional<std::string>>> out;
+  out.reserve(data_.size());
+
+  for (const auto& [key, value] : data_) {
+    out.emplace_back(key, value);
+  }
+  return out;
+}
