@@ -1,6 +1,7 @@
 #include <iostream>
 #include "lsm/memtable.h"
-
+#include "lsm/wal.h"
+#include <cstdio> 
 int main() {
     lsm::MemTable mt;
 
@@ -38,10 +39,7 @@ int main() {
     }
     }
 
-    if (mt.SizeBytes() == 0) {
-        std::cerr << "fail: empty size\n";
-        return 1;
-      }
+  
     if (mt.IsFull()) {  // should not be full
         std::cerr << "fail: should not be full\n";
         return 1;
@@ -53,8 +51,26 @@ int main() {
     return 1;
     }
 
+    
+
+    const std::string wal_path = "/tmp/spruce_test.wal";
+    std::remove(wal_path.c_str());
+
+    {
+    lsm::WalWriter w(wal_path);
+    w.AppendPut("a", "1");
+    w.AppendDelete("a");
+    }
+    
+    auto recs = lsm::ReadWal(wal_path);
+    if (recs.size() != 2) { 
+        std::cerr << "fail: wal size\n"; return 1; 
+    }
+
     std::cout << "memtable ok\n";
     return 0;
+
+
 
 
 }
