@@ -27,6 +27,9 @@ class WalWriter {
   void WriteRecord(WalOp op, std::string_view key, std::string_view value);
 };
 
+class MemTable;
 std::vector<WalRecord> ReadWal(const std::string& path);
+void ReplayWal(const std::string& path, MemTable& mt);
+
 
 }  // namespace lsm

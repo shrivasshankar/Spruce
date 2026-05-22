@@ -67,6 +67,29 @@ int main() {
         std::cerr << "fail: wal size\n"; return 1; 
     }
 
+    std::remove(wal_path.c_str());
+    {
+    lsm::WalWriter w(wal_path);
+    w.AppendPut("x", "hello");
+    w.AppendDelete("y");
+    w.AppendPut("z", "3");
+    }
+    lsm::MemTable recovered;
+    lsm::ReplayWal(wal_path, recovered);
+
+    if (recovered.Get("x") != std::optional<std::string>("hello")) {
+        std::cerr << "fail: replay x\n";
+        return 1;
+      }
+      if (recovered.Get("y").has_value()) {
+        std::cerr << "fail: replay y deleted\n";
+        return 1;
+      }
+      if (recovered.Get("z") != std::optional<std::string>("3")) {
+        std::cerr << "fail: replay z\n";
+        return 1;
+      }
+
     std::cout << "memtable ok\n";
     return 0;
 

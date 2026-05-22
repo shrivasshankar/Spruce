@@ -1,6 +1,7 @@
 #include "lsm/wal.h"
 #include <stdexcept>
 #include <string_view>
+#include "lsm/memtable.h"
 
 namespace lsm {
 WalWriter::WalWriter(std::string path) {
@@ -64,6 +65,18 @@ WalWriter::WalWriter(std::string path) {
     }
     return records;
   }
+
+  void ReplayWal(const std::string& path, MemTable& mt) {
+    for (const auto& rec : ReadWal(path)) {
+      if (rec.op == WalOp::kPut) {
+        mt.Put(rec.key, *rec.value);
+      } else {
+        mt.Delete(rec.key);
+      }
+    }
+
+  }
+
 
   
 }
