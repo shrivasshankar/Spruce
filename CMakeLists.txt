@@ -12,7 +12,7 @@ endif()
 
 add_compile_options(-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion)
 
-add_library(lsm src/memtable.cpp src/wal.cpp)
+add_library(lsm src/memtable.cpp src/wal.cpp src/sstable.cpp)
 target_include_directories(lsm PUBLIC include)
 
 add_executable(spruce src/main.cpp)
