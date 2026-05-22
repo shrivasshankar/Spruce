@@ -21,6 +21,7 @@ class WalWriter {
   explicit WalWriter(std::string path);
   void AppendPut(std::string key, std::string value);
   void AppendDelete(std::string key);
+  void Sync();
 
  private:
   std::fstream file_;
@@ -32,4 +33,5 @@ std::vector<WalRecord> ReadWal(const std::string& path);
 void ReplayWal(const std::string& path, MemTable& mt);
 
 
-}  // namespace lsm
+}  
+
