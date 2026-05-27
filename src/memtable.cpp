@@ -1,5 +1,8 @@
 #include "lsm/memtable.h"
 
+lsm::MemTable::MemTable(size_t buffer_size_bytes)
+    : buffer_size_bytes_(buffer_size_bytes) {}
+
 void lsm::MemTable::Put(std::string key, std::string value) {
     data_[std::move(key)] = std::move(value);  
   }
@@ -39,6 +42,5 @@ size_t lsm::MemTable::SizeBytes() const {
 }
 
 bool lsm::MemTable::IsFull() const {
-    constexpr size_t kMaxMemTableBytes = 4 * 1024 * 1024;
-    return SizeBytes() >= kMaxMemTableBytes;
-}
+    return SizeBytes() >= buffer_size_bytes_;
+  }

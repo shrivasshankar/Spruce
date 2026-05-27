@@ -1,5 +1,4 @@
 #include "lsm/sstable.h"
-#include "lsm/sstable.h"
 
 #include <cstdint>
 #include <fstream>

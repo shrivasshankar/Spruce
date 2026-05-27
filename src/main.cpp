@@ -2,8 +2,10 @@
 #include "lsm/memtable.h"
 #include "lsm/wal.h"
 #include <cstdio> 
+#include "lsm/config.h"
 int main() {
-    lsm::MemTable mt;
+    const lsm::Config cfg;
+    lsm::MemTable mt(cfg.buffer_size_bytes);
 
     mt.Delete("a");
     if (mt.Get("a").has_value()) {
@@ -45,7 +47,7 @@ int main() {
         return 1;
     }
 
-    lsm::MemTable empty;
+    lsm::MemTable empty(cfg.buffer_size_bytes);
     if (empty.SizeBytes() != 0 || empty.IsFull()) {
     std::cerr << "fail: empty memtable\n";
     return 1;
@@ -74,7 +76,7 @@ int main() {
     w.AppendDelete("y");
     w.AppendPut("z", "3");
     }
-    lsm::MemTable recovered;
+    lsm::MemTable recovered(cfg.buffer_size_bytes);
     lsm::ReplayWal(wal_path, recovered);
 
     if (recovered.Get("x") != std::optional<std::string>("hello")) {
