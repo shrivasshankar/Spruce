@@ -3,6 +3,8 @@
 #include "lsm/wal.h"
 #include <cstdio> 
 #include "lsm/config.h"
+#include "lsm/sstable.h"
+#include <fstream>
 int main() {
     const lsm::Config cfg;
     lsm::MemTable mt(cfg.buffer_size_bytes);
@@ -91,6 +93,47 @@ int main() {
         std::cerr << "fail: replay z\n";
         return 1;
       }
+
+      
+
+// ...
+
+    const std::string sst_path = "/tmp/spruce_test.sst";
+    std::remove(sst_path.c_str());
+
+    {
+      std::ofstream out(sst_path, std::ios::binary);
+      if (!out) {
+        std::cerr << "fail: open sst\n";
+        return 1;
+      }
+
+      lsm::SSTableWriter writer(cfg.block_size_bytes);
+      writer.Add("a", "1");
+      writer.Add("b", std::nullopt);  // tombstone
+      writer.Add("c", "3");
+      writer.Finish(out);
+    }
+
+    std::ifstream in(sst_path, std::ios::binary | std::ios::ate);
+    if (!in) {
+      std::cerr << "fail: read sst\n";
+      return 1;
+    }
+    const auto file_size = in.tellg();
+    if (file_size < 12) {  // at least magic + footer_size + something
+      std::cerr << "fail: sst too small\n";
+      return 1;
+    }
+
+    // Optional: check magic at end
+    char magic[4] = {};
+    in.seekg(-4, std::ios::end);
+    in.read(magic, 4);
+    if (magic[0] != 'S' || magic[1] != 'P' || magic[2] != 'R' || magic[3] != 'U') {
+      std::cerr << "fail: bad sst magic\n";
+      return 1;
+    }
 
     std::cout << "memtable ok\n";
     return 0;

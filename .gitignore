@@ -4,3 +4,6 @@ build/
 *.o
 *.a
 compile_commands.json
+
+# Local LLM session handoff — not for the public repo
+docs/LLM_CONTEXT.md
