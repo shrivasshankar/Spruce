@@ -1,5 +1,5 @@
 #include "lsm/sstable.h"
-
+#include <cstring>
 #include <cstdint>
 #include <fstream>
 #include <stdexcept>
@@ -13,6 +13,29 @@ namespace {
   }
   void AppendU64(std::string& out, std::uint64_t v) {
     out.append(reinterpret_cast<const char*>(&v), sizeof(v));
+  }
+
+  bool ReadU32(std::string_view data, std::size_t& pos, std::uint32_t& out) {
+    if (pos + sizeof(out) > data.size()) return false;
+    std::memcpy(&out, data.data() + pos, sizeof(out));
+    pos += sizeof(out);
+    return true;
+  }
+  
+  bool ReadU64(std::string_view data, std::size_t& pos, std::uint64_t& out) {
+    if (pos + sizeof(out) > data.size()) return false;
+    std::memcpy(&out, data.data() + pos, sizeof(out));
+    pos += sizeof(out);
+    return true;
+  }
+  
+  bool ReadString(std::string_view data, std::size_t& pos, std::string& out) {
+    std::uint32_t len = 0;
+    if (!ReadU32(data, pos, len)) return false;
+    if (pos + len > data.size()) return false;
+    out.assign(data.data() + pos, len);
+    pos += len;
+    return true;
   }
   
   std::string SerializeFooter(const lsm::Footer& footer) {
@@ -34,7 +57,31 @@ namespace {
     return blob;
   }
 
+  bool DeserializeFooter(std::string_view blob, lsm::Footer& out) {
+    std::size_t pos = 0;
   
+    if (!ReadU64(blob, pos, out.entry_count)) return false;
+    if (!ReadString(blob, pos, out.min_key)) return false;
+    if (!ReadString(blob, pos, out.max_key)) return false;
+  
+    std::uint32_t index_count = 0;
+    if (!ReadU32(blob, pos, index_count)) return false;
+  
+    out.index.clear();
+    out.index.reserve(index_count);
+  
+    for (std::uint32_t i = 0; i < index_count; ++i) {
+      lsm::BlockHandle handle;
+      if (!ReadString(blob, pos, handle.first_key)) return false;
+      if (!ReadU64(blob, pos, handle.offset)) return false;
+      if (!ReadU32(blob, pos, handle.size)) return false;
+      out.index.push_back(std::move(handle));
+    }
+  
+    return pos == blob.size();
+  }
+  
+    
   
   }
 namespace lsm {
@@ -173,6 +220,57 @@ void lsm::SSTableWriter::Finish(std::ostream& out) {
   if (!out.good()) {
     throw std::runtime_error("SSTable finish failed");
   }
+}
+
+lsm::SSTable lsm::SSTable::Open(const std::string& path) {
+  std::ifstream in(path, std::ios::binary | std::ios::ate);
+  if (!in) {
+    throw std::runtime_error("failed to open SSTable: " + path);
+  }
+
+  const auto file_size = in.tellg();
+  if (file_size < 12) {
+    throw std::runtime_error("SSTable file too small: " + path);
+  }
+
+  char magic[4] = {};
+  in.seekg(-4, std::ios::end);
+  in.read(magic, 4);
+  if (magic[0] != 'S' || magic[1] != 'P' || magic[2] != 'R' || magic[3] != 'U') {
+    throw std::runtime_error("bad SSTable magic: " + path);
+  }
+
+
+
+  std::uint64_t footer_size = 0;
+  in.seekg(-12, std::ios::end);
+  in.read(reinterpret_cast<char*>(&footer_size), sizeof(footer_size));
+
+  const auto footer_start =
+      static_cast<std::streamoff>(file_size) - 12 -
+      static_cast<std::streamoff>(footer_size);
+  if (footer_start < 0) {
+    throw std::runtime_error("invalid SSTable footer size: " + path);
+  }
+
+  std::string footer_blob(static_cast<std::size_t>(footer_size), '\0');
+  in.seekg(footer_start);
+  in.read(footer_blob.data(), static_cast<std::streamsize>(footer_size));
+
+  Footer footer;
+  if (!DeserializeFooter(footer_blob, footer)) {
+    throw std::runtime_error("failed to parse SSTable footer: " + path);
+  }
+
+  SSTable table;
+  table.path_ = path;
+  table.footer_ = std::move(footer);
+  return table;
+}
+
+  std::optional<std::optional<std::string>>
+lsm::SSTable::Get(std::string_view /*key*/) const {
+  throw std::runtime_error("SSTable::Get not implemented yet");
 }
 
 }  // namespace lsm

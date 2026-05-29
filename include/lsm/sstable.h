@@ -12,7 +12,6 @@ namespace lsm {
         const std::string& path,
         const std::vector<std::pair<std::string, std::optional<std::string>>>& rows);
     
-    #include <cstdint>
 
     struct BlockHandle {
     std::string first_key;
@@ -57,7 +56,10 @@ namespace lsm {
         public:
          static SSTable Open(const std::string& path);
          std::optional<std::optional<std::string>> Get(std::string_view key) const;
-         // outer nullopt = key not in file; inner nullopt = tombstone
+       
+        private:
+         std::string path_;
+         Footer footer_;
        };
 
     

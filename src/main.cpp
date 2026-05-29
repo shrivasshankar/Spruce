@@ -115,25 +115,8 @@ int main() {
       writer.Finish(out);
     }
 
-    std::ifstream in(sst_path, std::ios::binary | std::ios::ate);
-    if (!in) {
-      std::cerr << "fail: read sst\n";
-      return 1;
-    }
-    const auto file_size = in.tellg();
-    if (file_size < 12) {  // at least magic + footer_size + something
-      std::cerr << "fail: sst too small\n";
-      return 1;
-    }
-
-    // Optional: check magic at end
-    char magic[4] = {};
-    in.seekg(-4, std::ios::end);
-    in.read(magic, 4);
-    if (magic[0] != 'S' || magic[1] != 'P' || magic[2] != 'R' || magic[3] != 'U') {
-      std::cerr << "fail: bad sst magic\n";
-      return 1;
-    }
+    const auto table = lsm::SSTable::Open(sst_path);
+    (void)table;
 
     std::cout << "memtable ok\n";
     return 0;
