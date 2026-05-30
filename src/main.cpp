@@ -116,7 +116,27 @@ int main() {
     }
 
     const auto table = lsm::SSTable::Open(sst_path);
-    (void)table;
+
+    if (table.Get("a") != std::optional<std::string>("1")) {
+      std::cerr << "fail: sst get a\n";
+      return 1;
+    }
+
+    const auto b = table.Get("b");
+    if (!b.has_value() || b->has_value()) {
+      std::cerr << "fail: sst tombstone b\n";
+      return 1;
+    }
+
+    if (table.Get("c") != std::optional<std::string>("3")) {
+      std::cerr << "fail: sst get c\n";
+      return 1;
+    }
+
+    if (table.Get("zzz").has_value()) {
+      std::cerr << "fail: sst miss zzz\n";
+      return 1;
+    }
 
     std::cout << "memtable ok\n";
     return 0;
