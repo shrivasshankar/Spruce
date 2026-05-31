@@ -3,6 +3,7 @@
 #include "lsm/wal.h"
 #include <cstdio> 
 #include "lsm/config.h"
+#include "lsm/engine.h"
 #include "lsm/sstable.h"
 #include <fstream>
 int main() {
@@ -135,6 +136,18 @@ int main() {
 
     if (table.Get("zzz").has_value()) {
       std::cerr << "fail: sst miss zzz\n";
+      return 1;
+    }
+
+    lsm::LSMEngine db(cfg);
+    db.Put("engine_key", "engine_val");
+    if (db.Get("engine_key") != std::optional<std::string>("engine_val")) {
+      std::cerr << "fail: engine get\n";
+      return 1;
+    }
+    db.Delete("engine_key");
+    if (db.Get("engine_key").has_value()) {
+      std::cerr << "fail: engine delete\n";
       return 1;
     }
 
