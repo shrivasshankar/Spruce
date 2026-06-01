@@ -5,6 +5,8 @@
 #include <array>
 #include <cstddef>
 #include <fstream>
+#include <filesystem>
+namespace fs = std::filesystem;
 
 namespace {
   const std::array<std::uint32_t, 256>& Crc32Table() {
@@ -38,12 +40,13 @@ namespace {
 } 
 
 namespace lsm {
-WalWriter::WalWriter(std::string path) {
-  file_.open(path, std::ios::binary | std::ios::app);
-  if (!file_) {
-    throw std::runtime_error("failed to open WAL: " + path);
+  WalWriter::WalWriter(std::string path) : path_(std::move(path)) {
+    fs::create_directories(fs::path(path_).parent_path());
+    file_.open(path_, std::ios::binary | std::ios::app);
+    if (!file_) {
+      throw std::runtime_error("failed to open WAL: " + path_);
+    }
   }
-}
 
   void WalWriter::WriteRecord(WalOp op, std::string_view key, std::string_view value) {
     const auto type = static_cast<std::uint8_t>(op);
@@ -138,6 +141,18 @@ WalWriter::WalWriter(std::string path) {
     file_.flush();
     if (file_.rdbuf()->pubsync() != 0) {
       throw std::runtime_error("WAL sync failed");
+    }
+  }
+  void WalWriter::Truncate() {
+    file_.close();
+    file_.open(path_, std::ios::binary | std::ios::out | std::ios::trunc);
+    if (!file_) {
+      throw std::runtime_error("failed to truncate WAL: " + path_);
+    }
+    file_.close();
+    file_.open(path_, std::ios::binary | std::ios::app);
+    if (!file_) {
+      throw std::runtime_error("failed to reopen WAL: " + path_);
     }
   }
 

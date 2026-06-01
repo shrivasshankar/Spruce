@@ -22,8 +22,10 @@ class WalWriter {
   void AppendPut(std::string key, std::string value);
   void AppendDelete(std::string key);
   void Sync();
+  void Truncate();
 
  private:
+  std::string path_;
   std::fstream file_;
   void WriteRecord(WalOp op, std::string_view key, std::string_view value);
 };

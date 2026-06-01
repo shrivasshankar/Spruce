@@ -6,6 +6,10 @@
 #include "lsm/engine.h"
 #include "lsm/sstable.h"
 #include <fstream>
+#include <filesystem>
+#include <string>
+namespace fs = std::filesystem;
+
 int main() {
     const lsm::Config cfg;
     lsm::MemTable mt(cfg.buffer_size_bytes);
@@ -146,10 +150,52 @@ int main() {
       return 1;
     }
     db.Delete("engine_key");
-    if (db.Get("engine_key").has_value()) {
+    const auto deleted = db.Get("engine_key");
+    if (!deleted.has_value() || deleted->has_value()) {
       std::cerr << "fail: engine delete\n";
       return 1;
     }
+
+    const std::string engine_dir = "/tmp/spruce_engine_test";
+        fs::remove_all(engine_dir);
+    
+        lsm::Config engine_cfg;
+        engine_cfg.data_dir = engine_dir;
+        engine_cfg.buffer_size_bytes = 32;  // 7-byte key + 25-byte value triggers flush
+    
+        {
+          lsm::LSMEngine flush_db(engine_cfg);
+          flush_db.Put("on_disk", std::string(25, 'x'));
+          if (flush_db.Get("on_disk") != std::optional<std::string>(std::string(25, 'x'))) {
+            std::cerr << "fail: engine flush get same session\n";
+            return 1;
+          }
+        }
+        {
+          lsm::LSMEngine reopened(engine_cfg);
+          if (reopened.Get("on_disk") != std::optional<std::string>(std::string(25, 'x'))) {
+            std::cerr << "fail: engine flush get reopened\n";
+            return 1;
+          }
+        }
+        fs::remove_all(engine_dir);
+    
+        lsm::Config wal_cfg;
+        wal_cfg.data_dir = "/tmp/spruce_engine_wal_test";
+        fs::remove_all(wal_cfg.data_dir);
+    
+        {
+          lsm::LSMEngine wal_db(wal_cfg);
+          wal_db.Put("persist", "wal");
+        }
+        {
+          lsm::LSMEngine wal_reopened(wal_cfg);
+          if (wal_reopened.Get("persist") != std::optional<std::string>("wal")) {
+            std::cerr << "fail: engine wal replay\n";
+            return 1;
+          }
+        }
+        fs::remove_all(wal_cfg.data_dir);
 
     std::cout << "memtable ok\n";
     return 0;

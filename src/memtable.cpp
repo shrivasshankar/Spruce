@@ -15,6 +15,18 @@ std::optional<std::string> lsm::MemTable::Get(std::string_view key) const {
     return it->second;
 }
 
+std::optional<std::optional<std::string>> lsm::MemTable::Lookup(
+  std::string_view key) const {
+auto it = data_.find(std::string(key));
+if (it == data_.end()) {
+  return std::nullopt;              // miss
+}
+if (!it->second.has_value()) {
+  return std::optional<std::string>{};  // tombstone
+}
+return *it->second;               // live value
+}
+
 void lsm::MemTable::Delete(std::string key) {
     data_[std::move(key)] = std::nullopt;
 }

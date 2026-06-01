@@ -3,7 +3,9 @@
 #include "lsm/config.h"
 #include "lsm/memtable.h"
 #include "lsm/sstable.h"
+#include "lsm/wal.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -30,10 +32,16 @@ class LSMEngine {
 
  private:
   void MaybeFlush();
+  void Flush();
+  void LoadExistingSsts();
+  std::string WalPath() const;
+  std::string SstPath(std::uint64_t id) const;
 
   Config cfg_;
   MemTable memtable_;
+  WalWriter wal_;
   std::vector<Level> levels_;
+  std::uint64_t next_sst_id_ = 1;
 };
 
 }  // namespace lsm
