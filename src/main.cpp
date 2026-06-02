@@ -8,6 +8,9 @@
 #include <fstream>
 #include <filesystem>
 #include <string>
+#include "lsm/manifest.h"
+
+
 namespace fs = std::filesystem;
 
 int main() {
@@ -196,6 +199,29 @@ int main() {
           }
         }
         fs::remove_all(wal_cfg.data_dir);
+
+        {
+          const std::string manifest_dir = "/tmp/spruce_manifest_test";
+          fs::remove_all(manifest_dir);
+    
+          lsm::Manifest m;
+          m.next_sst_id = 3;
+          m.sst_paths = {"sst/000001.sst", "sst/000002.sst"};
+          lsm::SaveManifest(manifest_dir, m);
+    
+          const auto loaded = lsm::LoadManifest(manifest_dir);
+          if (loaded.next_sst_id != 3 || loaded.sst_paths.size() != 2) {
+            std::cerr << "fail: manifest load\n";
+            return 1;
+          }
+          if (loaded.sst_paths[0] != "sst/000001.sst" ||
+              loaded.sst_paths[1] != "sst/000002.sst") {
+            std::cerr << "fail: manifest paths\n";
+            return 1;
+          }
+    
+          fs::remove_all(manifest_dir);
+        }
 
     std::cout << "memtable ok\n";
     return 0;
