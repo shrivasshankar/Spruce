@@ -87,6 +87,7 @@ void LSMEngine::Flush() {
     return;
   }
 
+  const std::string rel_path = SstRelPath(next_sst_id_);
   const std::string path = SstPath(next_sst_id_);
   {
     std::ofstream out(path, std::ios::binary);
@@ -109,7 +110,11 @@ void LSMEngine::Flush() {
       std::make_unique<SSTable>(SSTable::Open(path)));
   levels_.front().runs.push_back(std::move(run));
 
+  manifest_.sst_paths.push_back(rel_path);
   ++next_sst_id_;
+  manifest_.next_sst_id = next_sst_id_;
+  SaveManifest(cfg_.data_dir, manifest_);
+
   memtable_ = MemTable(cfg_.buffer_size_bytes);
   wal_.Truncate();
 }
