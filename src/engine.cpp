@@ -1,6 +1,5 @@
 #include "lsm/engine.h"
 
-#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -11,15 +10,6 @@ namespace fs = std::filesystem;
 
 namespace lsm {
 
-namespace {
-
-std::uint64_t ParseSstId(const fs::path& path) {
-  const std::string stem = path.stem().string();
-  return static_cast<std::uint64_t>(std::stoull(stem));
-}
-
-}  // namespace
-
 LSMEngine::LSMEngine(Config cfg)
     : cfg_(std::move(cfg)),
       memtable_(cfg_.buffer_size_bytes),
@@ -28,7 +18,7 @@ LSMEngine::LSMEngine(Config cfg)
   fs::create_directories(fs::path(cfg_.data_dir) / "sst");
   fs::create_directories(fs::path(cfg_.data_dir) / "wal");
 
-  LoadExistingSsts();
+  LoadFromManifest();
   ReplayWal(WalPath(), memtable_);
 }
 
@@ -74,10 +64,14 @@ std::string LSMEngine::WalPath() const {
   return (fs::path(cfg_.data_dir) / "wal" / "log.wal").string();
 }
 
-std::string LSMEngine::SstPath(std::uint64_t id) const {
+std::string LSMEngine::SstRelPath(std::uint64_t id) const {
   std::ostringstream name;
   name << std::setw(6) << std::setfill('0') << id << ".sst";
-  return (fs::path(cfg_.data_dir) / "sst" / name.str()).string();
+  return (fs::path("sst") / name.str()).string();
+}
+
+std::string LSMEngine::SstPath(std::uint64_t id) const {
+  return (fs::path(cfg_.data_dir) / SstRelPath(id)).string();
 }
 
 void LSMEngine::MaybeFlush() {
@@ -120,26 +114,16 @@ void LSMEngine::Flush() {
   wal_.Truncate();
 }
 
-void LSMEngine::LoadExistingSsts() {
-  const fs::path sst_dir = fs::path(cfg_.data_dir) / "sst";
-  if (!fs::exists(sst_dir)) {
-    return;
-  }
+void LSMEngine::LoadFromManifest() {
+  manifest_ = LoadManifest(cfg_.data_dir);
+  next_sst_id_ = manifest_.next_sst_id;
 
-  std::vector<fs::path> paths;
-  for (const auto& entry : fs::directory_iterator(sst_dir)) {
-    if (entry.path().extension() == ".sst") {
-      paths.push_back(entry.path());
-    }
-  }
-
-  std::sort(paths.begin(), paths.end());
-  for (const auto& path : paths) {
+  for (const auto& rel_path : manifest_.sst_paths) {
+    const std::string path = (fs::path(cfg_.data_dir) / rel_path).string();
     Run run;
     run.files.push_back(
-        std::make_unique<SSTable>(SSTable::Open(path.string())));
+        std::make_unique<SSTable>(SSTable::Open(path)));
     levels_.front().runs.push_back(std::move(run));
-    next_sst_id_ = std::max(next_sst_id_, ParseSstId(path) + 1);
   }
 }
 
