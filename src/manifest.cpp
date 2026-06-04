@@ -116,6 +116,11 @@ void SaveManifest(const std::string& data_dir, const Manifest& manifest) {
   if (!out.good()) {
     throw std::runtime_error("MANIFEST write failed: " + path);
   }
+
+  out.flush();
+  if (out.rdbuf()->pubsync() != 0) {
+    throw std::runtime_error("MANIFEST sync failed: " + path);
+  }
 }
 
 }  // namespace lsm
