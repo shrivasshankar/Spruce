@@ -223,6 +223,40 @@ int main() {
           fs::remove_all(manifest_dir);
         }
 
+        {
+          const std::string engine_manifest_dir = "/tmp/spruce_engine_manifest_test";
+          fs::remove_all(engine_manifest_dir);
+
+          lsm::Config manifest_engine_cfg;
+          manifest_engine_cfg.data_dir = engine_manifest_dir;
+          manifest_engine_cfg.buffer_size_bytes = 32;
+
+          {
+            lsm::LSMEngine manifest_db(manifest_engine_cfg);
+            manifest_db.Put("manifest_key", std::string(25, 'y'));
+          }
+
+          if (!fs::exists(engine_manifest_dir + "/MANIFEST")) {
+            std::cerr << "fail: MANIFEST missing after flush\n";
+            return 1;
+          }
+
+          const auto manifest = lsm::LoadManifest(engine_manifest_dir);
+          if (manifest.sst_paths.size() != 1) {
+            std::cerr << "fail: MANIFEST sst count\n";
+            return 1;
+          }
+
+          lsm::LSMEngine manifest_reopened(manifest_engine_cfg);
+          if (manifest_reopened.Get("manifest_key") !=
+              std::optional<std::string>(std::string(25, 'y'))) {
+            std::cerr << "fail: engine manifest reopen\n";
+            return 1;
+          }
+
+          fs::remove_all(engine_manifest_dir);
+        }
+
     std::cout << "memtable ok\n";
     return 0;
 
