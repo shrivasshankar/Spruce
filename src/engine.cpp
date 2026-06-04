@@ -13,13 +13,23 @@ namespace lsm {
 LSMEngine::LSMEngine(Config cfg)
     : cfg_(std::move(cfg)),
       memtable_(cfg_.buffer_size_bytes),
-      wal_(WalPath()),
-      levels_(1) {
+      wal_(WalPath()) {
   fs::create_directories(fs::path(cfg_.data_dir) / "sst");
   fs::create_directories(fs::path(cfg_.data_dir) / "wal");
 
+  InitHorizontalLevels();
   LoadFromManifest();
   ReplayWal(WalPath(), memtable_);
+}
+
+void LSMEngine::InitHorizontalLevels() {
+  if (cfg_.ell_horizontal < 1) {
+    throw std::runtime_error("ell_horizontal must be >= 1");
+  }
+
+  const auto level_count = static_cast<std::size_t>(cfg_.ell_horizontal);
+  levels_.resize(level_count);
+  compaction_counters_.assign(level_count, 0);  // Block 2: initialize k from paper
 }
 
 void LSMEngine::Put(std::string key, std::string value) {
@@ -39,13 +49,15 @@ std::optional<std::optional<std::string>> LSMEngine::Get(std::string_view key) c
     return std::nullopt;
   }
 
-  const Level& level = levels_.front();
-  for (auto run_it = level.runs.rbegin(); run_it != level.runs.rend(); ++run_it) {
-    for (auto file_it = run_it->files.rbegin(); file_it != run_it->files.rend();
-         ++file_it) {
-      const auto result = (*file_it)->Get(key);
-      if (result.has_value()) {
-        return result;
+  // Level 0 holds the newest runs; higher levels hold older compacted data.
+  for (const Level& level : levels_) {
+    for (auto run_it = level.runs.rbegin(); run_it != level.runs.rend(); ++run_it) {
+      for (auto file_it = run_it->files.rbegin(); file_it != run_it->files.rend();
+           ++file_it) {
+        const auto result = (*file_it)->Get(key);
+        if (result.has_value()) {
+          return result;
+        }
       }
     }
   }
@@ -103,6 +115,10 @@ void LSMEngine::Flush() {
     if (!out.good()) {
       throw std::runtime_error("SST flush failed: " + path);
     }
+    out.flush();
+    if (out.rdbuf()->pubsync() != 0) {
+      throw std::runtime_error("SST sync failed: " + path);
+    }
   }
 
   Run run;
@@ -117,6 +133,12 @@ void LSMEngine::Flush() {
 
   memtable_ = MemTable(cfg_.buffer_size_bytes);
   wal_.Truncate();
+
+  MaybeCompact();
+}
+
+void LSMEngine::MaybeCompact() {
+  // Phase 4 Block 2+: horizontal-tiering compaction counters and merges.
 }
 
 void LSMEngine::LoadFromManifest() {
