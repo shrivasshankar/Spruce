@@ -25,6 +25,10 @@ struct Level {
   std::vector<Run> runs;
 };
 
+struct GetProbeStats {
+  std::size_t sst_files_probed = 0;
+};
+
 class LSMEngine {
  public:
   explicit LSMEngine(Config cfg);
@@ -32,6 +36,7 @@ class LSMEngine {
   void Put(std::string key, std::string value);
   void Delete(std::string key);
   std::optional<std::optional<std::string>> Get(std::string_view key) const;
+  GetProbeStats LastGetProbeStats() const { return last_get_probe_stats_; }
 
  private:
   void MaybeFlush();
@@ -53,6 +58,7 @@ class LSMEngine {
   std::vector<int> compaction_counters_;  // current C_i; initialized to k_
   int k_ = 1;                             // reset target from Lemma 4.1
   std::uint64_t next_sst_id_ = 1;
+  mutable GetProbeStats last_get_probe_stats_;
 };
 
 }  // namespace lsm

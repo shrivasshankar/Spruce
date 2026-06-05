@@ -81,6 +81,8 @@ void LSMEngine::Put(std::string key, std::string value) {
 }
 
 std::optional<std::optional<std::string>> LSMEngine::Get(std::string_view key) const {
+  last_get_probe_stats_ = {};
+
   const auto mem = memtable_.Lookup(key);
   if (mem.has_value()) {
     return mem;
@@ -95,6 +97,7 @@ std::optional<std::optional<std::string>> LSMEngine::Get(std::string_view key) c
     for (auto run_it = level.runs.rbegin(); run_it != level.runs.rend(); ++run_it) {
       for (auto file_it = run_it->files.rbegin(); file_it != run_it->files.rend();
            ++file_it) {
+        ++last_get_probe_stats_.sst_files_probed;
         const auto result = (*file_it)->Get(key);
         if (result.has_value()) {
           return result;

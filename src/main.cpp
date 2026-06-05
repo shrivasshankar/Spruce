@@ -13,6 +13,42 @@
 
 namespace fs = std::filesystem;
 
+namespace {
+
+lsm::Config Figure5Config(const std::string& data_dir) {
+  lsm::Config cfg;
+  cfg.data_dir = data_dir;
+  // Each Put is 29 bytes (4-byte key + 25-byte value). Need 2*29 < B <= 3*29
+  // so exactly three Puts trigger one flush (Figure 5 counts flushes, not Puts).
+  cfg.buffer_size_bytes = 64;
+  cfg.estimated_data_buffers = 6;  // N/B -> k=3 with ell=2
+  cfg.ell_horizontal = 2;
+  return cfg;
+}
+
+void PutFlushBatch(lsm::LSMEngine& db, int start_key, int count) {
+  for (int i = start_key; i < start_key + count; ++i) {
+    db.Put("key" + std::to_string(i), std::string(25, 'x'));
+  }
+}
+
+std::size_t CountSstsAtLevel(const lsm::Manifest& manifest, std::uint32_t level) {
+  std::size_t count = 0;
+  for (const auto& entry : manifest.sst_entries) {
+    if (entry.level == level) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+bool CountersEqual(const lsm::Manifest& manifest,
+                   const std::vector<int>& expected) {
+  return manifest.compaction_counters == expected;
+}
+
+}  // namespace
+
 int main() {
     const lsm::Config cfg;
     lsm::MemTable mt(cfg.buffer_size_bytes);
@@ -274,20 +310,87 @@ int main() {
         }
 
         {
-          lsm::Config cfg;
-          cfg.data_dir = "/tmp/spruce_block3_test";
-          cfg.buffer_size_bytes = 32;
-          cfg.estimated_data_buffers = 6;  // k=3
-          cfg.ell_horizontal = 2;
-          std::filesystem::remove_all(cfg.data_dir);
-        
-          lsm::LSMEngine db(cfg);
-          for (int i = 0; i < 9; ++i) {
-            db.Put("key" + std::to_string(i), std::string(25, 'x'));
+          const std::string dir = "/tmp/spruce_figure5_test";
+          fs::remove_all(dir);
+          const lsm::Config cfg = Figure5Config(dir);
+
+          // Figure 5: ell=2, N/B=6 -> k=3. Each flush decrements C[0].
+          // Flush 1: C=[2,3], one run on level 0.
+          {
+            lsm::LSMEngine db(cfg);
+            PutFlushBatch(db, 0, 3);
           }
-          // Watch stderr: after 3rd flush expect C[0]=2 C[1]=2
-        
-          std::filesystem::remove_all(cfg.data_dir);
+          {
+            const auto manifest = lsm::LoadManifest(dir);
+            if (manifest.k != 3) {
+              std::cerr << "fail: figure5 k after flush 1\n";
+              return 1;
+            }
+            if (!CountersEqual(manifest, {2, 3})) {
+              std::cerr << "fail: figure5 counters after flush 1\n";
+              return 1;
+            }
+            if (CountSstsAtLevel(manifest, 0) != 1 ||
+                CountSstsAtLevel(manifest, 1) != 0) {
+              std::cerr << "fail: figure5 layout after flush 1\n";
+              return 1;
+            }
+          }
+
+          // Flush 2: C=[1,3], two runs on level 0.
+          {
+            lsm::LSMEngine db(cfg);
+            PutFlushBatch(db, 3, 3);
+          }
+          {
+            const auto manifest = lsm::LoadManifest(dir);
+            if (!CountersEqual(manifest, {1, 3})) {
+              std::cerr << "fail: figure5 counters after flush 2\n";
+              return 1;
+            }
+            if (CountSstsAtLevel(manifest, 0) != 2 ||
+                CountSstsAtLevel(manifest, 1) != 0) {
+              std::cerr << "fail: figure5 layout after flush 2\n";
+              return 1;
+            }
+          }
+
+          // Flush 3: C[0] hits 0 -> compact level 0 -> C=[2,2], one run on level 1.
+          {
+            lsm::LSMEngine db(cfg);
+            PutFlushBatch(db, 6, 3);
+          }
+          {
+            const auto manifest = lsm::LoadManifest(dir);
+            if (!CountersEqual(manifest, {2, 2})) {
+              std::cerr << "fail: figure5 counters after flush 3\n";
+              return 1;
+            }
+            if (CountSstsAtLevel(manifest, 0) != 0 ||
+                CountSstsAtLevel(manifest, 1) != 1) {
+              std::cerr << "fail: figure5 layout after flush 3\n";
+              return 1;
+            }
+          }
+
+          // Reopen restores counters + tiered layout; all keys still readable.
+          {
+            lsm::LSMEngine db(cfg);
+            const auto manifest = lsm::LoadManifest(dir);
+            if (!CountersEqual(manifest, {2, 2})) {
+              std::cerr << "fail: figure5 counters after reopen\n";
+              return 1;
+            }
+            for (int i = 0; i < 9; ++i) {
+              if (db.Get("key" + std::to_string(i)) !=
+                  std::optional<std::string>(std::string(25, 'x'))) {
+                std::cerr << "fail: figure5 get after reopen key" << i << '\n';
+                return 1;
+              }
+            }
+          }
+
+          fs::remove_all(dir);
         }
 
         {

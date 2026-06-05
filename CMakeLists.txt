@@ -17,3 +17,6 @@ target_include_directories(lsm PUBLIC include)
 
 add_executable(spruce src/main.cpp)
 target_link_libraries(spruce PRIVATE lsm)
+
+add_executable(spruce_bench src/benchmark.cpp)
+target_link_libraries(spruce_bench PRIVATE lsm)
