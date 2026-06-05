@@ -1,5 +1,5 @@
 #include "lsm/manifest.h"
-
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -15,6 +15,17 @@ void AppendU32(std::string& out, std::uint32_t v) {
 
 void AppendU64(std::string& out, std::uint64_t v) {
   out.append(reinterpret_cast<const char*>(&v), sizeof(v));
+}
+
+void AppendI32(std::string& out, std::int32_t v) {
+  out.append(reinterpret_cast<const char*>(&v), sizeof(v));
+}
+
+bool ReadI32(const std::string& data, std::size_t& pos, std::int32_t& out) {
+  if (pos + sizeof(out) > data.size()) return false;
+  std::memcpy(&out, data.data() + pos, sizeof(out));
+  pos += sizeof(out);
+  return true;
 }
 
 bool ReadU32(const std::string& data, std::size_t& pos, std::uint32_t& out) {
@@ -72,19 +83,45 @@ Manifest LoadManifest(const std::string& data_dir) {
     throw std::runtime_error("failed to parse MANIFEST: " + path);
   }
 
-  std::uint32_t count = 0;
-  if (!ReadU32(blob, pos, count)) {
+  std::int32_t k = 1;
+  if (!ReadI32(blob, pos, k)) {
+    throw std::runtime_error("failed to parse MANIFEST: " + path);
+  }
+  manifest.k = k;
+
+  std::uint32_t counter_count = 0;
+  if (!ReadU32(blob, pos, counter_count)) {
     throw std::runtime_error("failed to parse MANIFEST: " + path);
   }
 
-  manifest.sst_paths.clear();
-  manifest.sst_paths.reserve(count);
-  for (std::uint32_t i = 0; i < count; ++i) {
-    std::string sst_path;
-    if (!ReadString(blob, pos, sst_path)) {
+  manifest.compaction_counters.clear();
+  manifest.compaction_counters.reserve(counter_count);
+  for (std::uint32_t i = 0; i < counter_count; ++i) {
+    std::int32_t counter = 0;
+    if (!ReadI32(blob, pos, counter)) {
       throw std::runtime_error("failed to parse MANIFEST: " + path);
     }
-    manifest.sst_paths.push_back(std::move(sst_path));
+    manifest.compaction_counters.push_back(counter);
+  }
+
+  std::uint32_t sst_count = 0;
+  if (!ReadU32(blob, pos, sst_count)) {
+    throw std::runtime_error("failed to parse MANIFEST: " + path);
+  }
+
+  manifest.sst_entries.clear();
+  manifest.sst_entries.reserve(sst_count);
+  for (std::uint32_t i = 0; i < sst_count; ++i) {
+    SstEntry entry;
+    if (!ReadString(blob, pos, entry.rel_path)) {
+      throw std::runtime_error("failed to parse MANIFEST: " + path);
+    }
+    std::uint32_t level = 0;
+    if (!ReadU32(blob, pos, level)) {
+      throw std::runtime_error("failed to parse MANIFEST: " + path);
+    }
+    entry.level = level;
+    manifest.sst_entries.push_back(std::move(entry));
   }
 
   if (pos != blob.size()) {
@@ -100,11 +137,18 @@ void SaveManifest(const std::string& data_dir, const Manifest& manifest) {
   std::string blob;
   blob.append("MANI", 4);
   AppendU64(blob, manifest.next_sst_id);
-  AppendU32(blob, static_cast<std::uint32_t>(manifest.sst_paths.size()));
 
-  for (const auto& sst_path : manifest.sst_paths) {
-    AppendU32(blob, static_cast<std::uint32_t>(sst_path.size()));
-    blob.append(sst_path);
+  AppendI32(blob, static_cast<std::int32_t>(manifest.k));
+  AppendU32(blob, static_cast<std::uint32_t>(manifest.compaction_counters.size()));
+  for (int counter : manifest.compaction_counters) {
+    AppendI32(blob, static_cast<std::int32_t>(counter));
+  }
+
+  AppendU32(blob, static_cast<std::uint32_t>(manifest.sst_entries.size()));
+  for (const auto& entry : manifest.sst_entries) {
+    AppendU32(blob, static_cast<std::uint32_t>(entry.rel_path.size()));
+    blob.append(entry.rel_path);
+    AppendU32(blob, entry.level);
   }
 
   const std::string path = ManifestPath(data_dir);

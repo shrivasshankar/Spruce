@@ -1,5 +1,5 @@
 #include "lsm/engine.h"
-#include <iostream>
+
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -140,7 +140,6 @@ void LSMEngine::Flush() {
     return;
   }
 
-  const std::string rel_path = SstRelPath(next_sst_id_);
   const std::string path = SstPath(next_sst_id_);
   {
     std::ofstream out(path, std::ios::binary);
@@ -167,15 +166,15 @@ void LSMEngine::Flush() {
       std::make_unique<SSTable>(SSTable::Open(path)));
   levels_.front().runs.push_back(std::move(run));
 
-  manifest_.sst_paths.push_back(rel_path);
   ++next_sst_id_;
-  manifest_.next_sst_id = next_sst_id_;
-  SaveManifest(cfg_.data_dir, manifest_);
 
   memtable_ = MemTable(cfg_.buffer_size_bytes);
   wal_.Truncate();
 
   MaybeCompact();
+
+  SyncManifestFromLevels();
+  SaveManifest(cfg_.data_dir, manifest_);
 }
 
 void LSMEngine::CompactHorizontalLevel(std::size_t level_idx) {
@@ -211,7 +210,6 @@ void LSMEngine::CompactHorizontalLevel(std::size_t level_idx) {
     return;
   }
 
-  const std::string rel_path = SstRelPath(next_sst_id_);
   const std::string path = SstPath(next_sst_id_);
   {
     std::ofstream out(path, std::ios::binary);
@@ -237,21 +235,29 @@ void LSMEngine::CompactHorizontalLevel(std::size_t level_idx) {
   new_run.files.push_back(std::make_unique<SSTable>(SSTable::Open(path)));
   levels_[level_idx + 1].runs.push_back(std::move(new_run));
 
-  for (const auto& absorbed : absorbed_rel_paths) {
-    auto& paths = manifest_.sst_paths;
-    paths.erase(
-        std::remove(paths.begin(), paths.end(), absorbed),
-        paths.end());
-  }
-
-  manifest_.sst_paths.push_back(rel_path);
   ++next_sst_id_;
-  manifest_.next_sst_id = next_sst_id_;
-  SaveManifest(cfg_.data_dir, manifest_);
 
   for (const auto& absorbed : absorbed_rel_paths) {
     std::error_code ec;
     fs::remove(fs::path(cfg_.data_dir) / absorbed, ec);
+  }
+}
+
+void LSMEngine::SyncManifestFromLevels() {
+  manifest_.next_sst_id = next_sst_id_;
+  manifest_.k = k_;
+  manifest_.compaction_counters = compaction_counters_;
+  manifest_.sst_entries.clear();
+
+  for (std::size_t level_idx = 0; level_idx < levels_.size(); ++level_idx) {
+    for (const Run& run : levels_[level_idx].runs) {
+      for (const auto& file : run.files) {
+        SstEntry entry;
+        entry.rel_path = RelPathFromFull(cfg_.data_dir, file->Path());
+        entry.level = static_cast<std::uint32_t>(level_idx);
+        manifest_.sst_entries.push_back(std::move(entry));
+      }
+    }
   }
 }
 
@@ -277,26 +283,27 @@ void LSMEngine::MaybeCompact() {
       compaction_counters_[j] = reset_value;
     }
   }
-
-    // DEBUG — remove before commit
-    for (std::size_t i = 0; i < compaction_counters_.size(); ++i) {
-      std::cerr << "C[" << i << "]=" << compaction_counters_[i] << ' ';
-    }
-    std::cerr << '\n';
 }
-
-
 
 void LSMEngine::LoadFromManifest() {
   manifest_ = LoadManifest(cfg_.data_dir);
   next_sst_id_ = manifest_.next_sst_id;
 
-  for (const auto& rel_path : manifest_.sst_paths) {
-    const std::string path = (fs::path(cfg_.data_dir) / rel_path).string();
+  if (!manifest_.compaction_counters.empty()) {
+    k_ = manifest_.k;
+    compaction_counters_ = manifest_.compaction_counters;
+  }
+
+  for (const auto& entry : manifest_.sst_entries) {
+    if (entry.level >= levels_.size()) {
+      throw std::runtime_error("MANIFEST SST level out of range");
+    }
+
+    const std::string path = (fs::path(cfg_.data_dir) / entry.rel_path).string();
     Run run;
     run.files.push_back(
         std::make_unique<SSTable>(SSTable::Open(path)));
-    levels_.front().runs.push_back(std::move(run));
+    levels_[entry.level].runs.push_back(std::move(run));
   }
 }
 

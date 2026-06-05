@@ -206,17 +206,28 @@ int main() {
     
           lsm::Manifest m;
           m.next_sst_id = 3;
-          m.sst_paths = {"sst/000001.sst", "sst/000002.sst"};
+          m.k = 3;
+          m.compaction_counters = {3, 3};
+          m.sst_entries = {
+              {"sst/000001.sst", 0},
+              {"sst/000002.sst", 1},
+          };
           lsm::SaveManifest(manifest_dir, m);
-    
+
           const auto loaded = lsm::LoadManifest(manifest_dir);
-          if (loaded.next_sst_id != 3 || loaded.sst_paths.size() != 2) {
+          if (loaded.next_sst_id != 3 || loaded.sst_entries.size() != 2) {
             std::cerr << "fail: manifest load\n";
             return 1;
           }
-          if (loaded.sst_paths[0] != "sst/000001.sst" ||
-              loaded.sst_paths[1] != "sst/000002.sst") {
-            std::cerr << "fail: manifest paths\n";
+          if (loaded.k != 3 || loaded.compaction_counters != std::vector<int>({3, 3})) {
+            std::cerr << "fail: manifest counters\n";
+            return 1;
+          }
+          if (loaded.sst_entries[0].rel_path != "sst/000001.sst" ||
+              loaded.sst_entries[0].level != 0 ||
+              loaded.sst_entries[1].rel_path != "sst/000002.sst" ||
+              loaded.sst_entries[1].level != 1) {
+            std::cerr << "fail: manifest entries\n";
             return 1;
           }
     
@@ -247,7 +258,7 @@ int main() {
           }
 
           const auto manifest = lsm::LoadManifest(engine_manifest_dir);
-          if (manifest.sst_paths.size() != 1) {
+          if (manifest.sst_entries.size() != 1) {
             std::cerr << "fail: MANIFEST sst count\n";
             return 1;
           }
@@ -298,6 +309,30 @@ int main() {
           }
 
           std::filesystem::remove_all(compact_cfg.data_dir);
+        }
+
+        {
+          lsm::Config cfg;
+          cfg.data_dir = "/tmp/spruce_reopen_compact_test";
+          cfg.buffer_size_bytes = 32;
+          cfg.estimated_data_buffers = 6;
+          cfg.ell_horizontal = 2;
+          std::filesystem::remove_all(cfg.data_dir);
+
+          {
+            lsm::LSMEngine db(cfg);
+            for (int i = 0; i < 9; ++i) {
+              db.Put("key" + std::to_string(i), std::string(25, 'x'));
+            }
+          }
+
+          lsm::LSMEngine reopened(cfg);
+          if (reopened.Get("key0") != std::optional<std::string>(std::string(25, 'x'))) {
+            std::cerr << "fail: reopen after compaction\n";
+            return 1;
+          }
+
+          std::filesystem::remove_all(cfg.data_dir);
         }
 
     std::cout << "memtable ok\n";

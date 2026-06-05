@@ -39,6 +39,7 @@ class LSMEngine {
   void MaybeCompact();
   void CompactHorizontalLevel(std::size_t level_idx);
   void InitHorizontalLevels();
+  void SyncManifestFromLevels();
   void LoadFromManifest();
   std::string SstRelPath(std::uint64_t id) const;
   std::string WalPath() const;
