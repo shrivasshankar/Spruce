@@ -279,6 +279,27 @@ int main() {
           std::filesystem::remove_all(cfg.data_dir);
         }
 
+        {
+          lsm::Config compact_cfg;
+          compact_cfg.data_dir = "/tmp/spruce_compact_test";
+          compact_cfg.buffer_size_bytes = 32;
+          compact_cfg.estimated_data_buffers = 6;
+          compact_cfg.ell_horizontal = 2;
+          std::filesystem::remove_all(compact_cfg.data_dir);
+
+          lsm::LSMEngine compact_db(compact_cfg);
+          for (int i = 0; i < 9; ++i) {
+            compact_db.Put("key" + std::to_string(i), std::string(25, 'x'));
+          }
+
+          if (compact_db.Get("key0") != std::optional<std::string>(std::string(25, 'x'))) {
+            std::cerr << "fail: get after compaction\n";
+            return 1;
+          }
+
+          std::filesystem::remove_all(compact_cfg.data_dir);
+        }
+
     std::cout << "memtable ok\n";
     return 0;
 

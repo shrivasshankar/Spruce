@@ -1,11 +1,12 @@
 #include "lsm/engine.h"
 #include <iostream>
-
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <map>
+#include <algorithm>
 
 namespace fs = std::filesystem;
 
@@ -24,6 +25,9 @@ int Binomial(int n, int k) {
     result = result * (n - i) / (i + 1);
   }
   return result;
+}
+std::string RelPathFromFull(const std::string& data_dir, const std::string& full_path) {
+  return fs::relative(full_path, data_dir).string();
 }
 
 }  // namespace
@@ -178,8 +182,77 @@ void LSMEngine::CompactHorizontalLevel(std::size_t level_idx) {
   if (level_idx + 1 >= levels_.size()) {
     return;  // last horizontal level -> vertical (Phase 5)
   }
-  // Block 4: merge all runs on levels_[level_idx] into level_idx + 1
-  (void)level_idx;
+
+  Level& src = levels_[level_idx];
+  if (src.runs.empty()) {
+    return;
+  }
+
+  // Newest run first; first insert wins -> newest version kept.
+  std::map<std::string, std::optional<std::string>> merged;
+  std::vector<std::string> absorbed_rel_paths;
+
+  for (auto run_it = src.runs.rbegin(); run_it != src.runs.rend(); ++run_it) {
+    for (const auto& file : run_it->files) {
+      absorbed_rel_paths.push_back(
+          RelPathFromFull(cfg_.data_dir, file->Path()));
+
+      for (const auto& [key, value] : file->Entries()) {
+        if (merged.find(key) == merged.end()) {
+          merged[key] = value;
+        }
+      }
+    }
+  }
+
+  src.runs.clear();
+
+  if (merged.empty()) {
+    return;
+  }
+
+  const std::string rel_path = SstRelPath(next_sst_id_);
+  const std::string path = SstPath(next_sst_id_);
+  {
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+      throw std::runtime_error("failed to open SST for compaction: " + path);
+    }
+
+    SSTableWriter writer(cfg_.block_size_bytes);
+    for (const auto& [key, value] : merged) {
+      writer.Add(key, value);
+    }
+    writer.Finish(out);
+    if (!out.good()) {
+      throw std::runtime_error("SST compaction failed: " + path);
+    }
+    out.flush();
+    if (out.rdbuf()->pubsync() != 0) {
+      throw std::runtime_error("SST compaction sync failed: " + path);
+    }
+  }
+
+  Run new_run;
+  new_run.files.push_back(std::make_unique<SSTable>(SSTable::Open(path)));
+  levels_[level_idx + 1].runs.push_back(std::move(new_run));
+
+  for (const auto& absorbed : absorbed_rel_paths) {
+    auto& paths = manifest_.sst_paths;
+    paths.erase(
+        std::remove(paths.begin(), paths.end(), absorbed),
+        paths.end());
+  }
+
+  manifest_.sst_paths.push_back(rel_path);
+  ++next_sst_id_;
+  manifest_.next_sst_id = next_sst_id_;
+  SaveManifest(cfg_.data_dir, manifest_);
+
+  for (const auto& absorbed : absorbed_rel_paths) {
+    std::error_code ec;
+    fs::remove(fs::path(cfg_.data_dir) / absorbed, ec);
+  }
 }
 
 void LSMEngine::MaybeCompact() {

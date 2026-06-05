@@ -145,6 +145,43 @@ std::optional<std::optional<std::string>> LookupInBlock(std::string_view block,
   return std::nullopt;
 }
 
+void AppendBlockEntries(
+  std::string_view block,
+  std::vector<std::pair<std::string, std::optional<std::string>>>& out) {
+std::size_t pos = 0;
+
+while (pos < block.size()) {
+  std::uint32_t key_len = 0;
+  if (!ReadU32(block, pos, key_len)) {
+    throw std::runtime_error("corrupt SSTable block");
+  }
+  if (pos + key_len > block.size()) {
+    throw std::runtime_error("corrupt SSTable block");
+  }
+
+  std::string key(block.data() + pos, key_len);
+  pos += key_len;
+
+  std::uint32_t value_len = 0;
+  if (!ReadU32(block, pos, value_len)) {
+    throw std::runtime_error("corrupt SSTable block");
+  }
+
+  if (value_len == 0) {
+    out.emplace_back(std::move(key), std::nullopt);
+    continue;
+  }
+
+  if (pos + value_len > block.size()) {
+    throw std::runtime_error("corrupt SSTable block");
+  }
+
+  std::string value(block.data() + pos, value_len);
+  pos += value_len;
+  out.emplace_back(std::move(key), std::move(value));
+}
+}
+
 }  // namespace
 
 namespace lsm {
@@ -354,6 +391,32 @@ std::optional<std::optional<std::string>> SSTable::Get(std::string_view key) con
   }
 
   return LookupInBlock(block_data, key);
+}
+
+std::vector<std::pair<std::string, std::optional<std::string>>> SSTable::Entries() const {
+  std::vector<std::pair<std::string, std::optional<std::string>>> rows;
+  if (footer_.entry_count == 0) {
+    return rows;
+  }
+
+  std::ifstream in(path_, std::ios::binary);
+  if (!in) {
+    throw std::runtime_error("failed to open SSTable: " + path_);
+  }
+
+  rows.reserve(static_cast<std::size_t>(footer_.entry_count));
+
+  for (const BlockHandle& handle : footer_.index) {
+    std::string block_data(handle.size, '\0');
+    in.seekg(static_cast<std::streamoff>(handle.offset));
+    in.read(block_data.data(), static_cast<std::streamsize>(handle.size));
+    if (!in) {
+      throw std::runtime_error("failed to read SSTable block: " + path_);
+    }
+    AppendBlockEntries(block_data, rows);
+  }
+
+  return rows;
 }
 
 }  // namespace lsm
