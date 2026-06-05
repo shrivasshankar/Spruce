@@ -1,4 +1,5 @@
 #include "lsm/engine.h"
+#include <iostream>
 
 #include <filesystem>
 #include <fstream>
@@ -173,9 +174,45 @@ void LSMEngine::Flush() {
   MaybeCompact();
 }
 
-void LSMEngine::MaybeCompact() {
-  // Block 3: C[0]--, compact when C[i]==0, reset counters per Algorithm 2.
+void LSMEngine::CompactHorizontalLevel(std::size_t level_idx) {
+  if (level_idx + 1 >= levels_.size()) {
+    return;  // last horizontal level -> vertical (Phase 5)
+  }
+  // Block 4: merge all runs on levels_[level_idx] into level_idx + 1
+  (void)level_idx;
 }
+
+void LSMEngine::MaybeCompact() {
+  if (compaction_counters_.empty()) {
+    return;
+  }
+
+  // Each buffer flush decrements C[0] (paper's C_1).
+  compaction_counters_[0] -= 1;
+
+  for (std::size_t i = 0; i + 1 < compaction_counters_.size(); ++i) {
+    if (compaction_counters_[i] != 0) {
+      continue;
+    }
+
+    CompactHorizontalLevel(i);
+
+    compaction_counters_[i + 1] -= 1;
+
+    const int reset_value = compaction_counters_[i + 1];
+    for (std::size_t j = 0; j <= i; ++j) {
+      compaction_counters_[j] = reset_value;
+    }
+  }
+
+    // DEBUG — remove before commit
+    for (std::size_t i = 0; i < compaction_counters_.size(); ++i) {
+      std::cerr << "C[" << i << "]=" << compaction_counters_[i] << ' ';
+    }
+    std::cerr << '\n';
+}
+
+
 
 void LSMEngine::LoadFromManifest() {
   manifest_ = LoadManifest(cfg_.data_dir);

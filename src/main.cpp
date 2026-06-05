@@ -262,6 +262,23 @@ int main() {
           fs::remove_all(engine_manifest_dir);
         }
 
+        {
+          lsm::Config cfg;
+          cfg.data_dir = "/tmp/spruce_block3_test";
+          cfg.buffer_size_bytes = 32;
+          cfg.estimated_data_buffers = 6;  // k=3
+          cfg.ell_horizontal = 2;
+          std::filesystem::remove_all(cfg.data_dir);
+        
+          lsm::LSMEngine db(cfg);
+          for (int i = 0; i < 9; ++i) {
+            db.Put("key" + std::to_string(i), std::string(25, 'x'));
+          }
+          // Watch stderr: after 3rd flush expect C[0]=2 C[1]=2
+        
+          std::filesystem::remove_all(cfg.data_dir);
+        }
+
     std::cout << "memtable ok\n";
     return 0;
 
