@@ -8,7 +8,41 @@
 
 namespace fs = std::filesystem;
 
+namespace {
+
+int Binomial(int n, int k) {
+  if (k < 0 || k > n) {
+    return 0;
+  }
+  if (k == 0 || k == n) {
+    return 1;
+  }
+  k = std::min(k, n - k);
+  int result = 1;
+  for (int i = 0; i < k; ++i) {
+    result = result * (n - i) / (i + 1);
+  }
+  return result;
+}
+
+}  // namespace
+
 namespace lsm {
+
+int ComputeHorizontalTieringK(int ell_horizontal, int estimated_data_buffers) {
+  if (ell_horizontal < 1) {
+    throw std::runtime_error("ell_horizontal must be >= 1");
+  }
+  if (estimated_data_buffers < 1) {
+    throw std::runtime_error("estimated_data_buffers must be >= 1");
+  }
+
+  int k = 1;
+  while (Binomial(k + ell_horizontal - 1, ell_horizontal) < estimated_data_buffers) {
+    ++k;
+  }
+  return k;
+}
 
 LSMEngine::LSMEngine(Config cfg)
     : cfg_(std::move(cfg)),
@@ -29,7 +63,9 @@ void LSMEngine::InitHorizontalLevels() {
 
   const auto level_count = static_cast<std::size_t>(cfg_.ell_horizontal);
   levels_.resize(level_count);
-  compaction_counters_.assign(level_count, 0);  // Block 2: initialize k from paper
+
+  k_ = ComputeHorizontalTieringK(cfg_.ell_horizontal, cfg_.estimated_data_buffers);
+  compaction_counters_.assign(level_count, k_);  // Algorithm 2: C_i <- k
 }
 
 void LSMEngine::Put(std::string key, std::string value) {
@@ -138,7 +174,7 @@ void LSMEngine::Flush() {
 }
 
 void LSMEngine::MaybeCompact() {
-  // Phase 4 Block 2+: horizontal-tiering compaction counters and merges.
+  // Block 3: C[0]--, compact when C[i]==0, reset counters per Algorithm 2.
 }
 
 void LSMEngine::LoadFromManifest() {

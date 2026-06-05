@@ -223,6 +223,11 @@ int main() {
           fs::remove_all(manifest_dir);
         }
 
+        if (lsm::ComputeHorizontalTieringK(2, 6) != 3) {
+          std::cerr << "fail: Figure 5 k init (ell=2, N/B=6 -> k=3)\n";
+          return 1;
+        }
+
         {
           const std::string engine_manifest_dir = "/tmp/spruce_engine_manifest_test";
           fs::remove_all(engine_manifest_dir);

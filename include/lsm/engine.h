@@ -14,6 +14,9 @@
 
 namespace lsm {
 
+// Smallest k with binom(k + ell - 1, ell) >= estimated_data_buffers (Lemma 4.1).
+int ComputeHorizontalTieringK(int ell_horizontal, int estimated_data_buffers);
+
 struct Run {
   std::vector<std::unique_ptr<SSTable>> files;
 };
@@ -45,7 +48,8 @@ class LSMEngine {
   WalWriter wal_;
   Manifest manifest_;
   std::vector<Level> levels_;
-  std::vector<int> compaction_counters_;
+  std::vector<int> compaction_counters_;  // current C_i; initialized to k_
+  int k_ = 1;                             // reset target from Lemma 4.1
   std::uint64_t next_sst_id_ = 1;
 };
 
