@@ -57,6 +57,7 @@ LSMEngine::LSMEngine(Config cfg)
   fs::create_directories(fs::path(cfg_.data_dir) / "wal");
 
   InitHorizontalLevels();
+  InitVerticalLevels();
   LoadFromManifest();
   ReplayWal(WalPath(), memtable_);
 }
@@ -71,6 +72,28 @@ void LSMEngine::InitHorizontalLevels() {
 
   k_ = ComputeHorizontalTieringK(cfg_.ell_horizontal, cfg_.estimated_data_buffers);
   compaction_counters_.assign(level_count, k_);  // Algorithm 2: C_i <- k
+}
+
+void LSMEngine::InitVerticalLevels() {
+  vertical_levels_.clear();
+  vertical_levels_.resize(kVerticalLevelCount);
+  n_ = cfg_.n_initial;
+  if (n_ < 1) {
+    throw std::runtime_error("n_initial must be >= 1");
+  }
+}
+
+std::uint32_t LSMEngine::VerticalManifestLevelId(std::size_t vertical_idx) const {
+  return static_cast<std::uint32_t>(levels_.size() + vertical_idx);
+}
+
+bool LSMEngine::IsVerticalManifestLevel(std::uint32_t level) const {
+  const auto base = static_cast<std::uint32_t>(levels_.size());
+  return level >= base && level < base + static_cast<std::uint32_t>(kVerticalLevelCount);
+}
+
+std::size_t LSMEngine::VerticalIndexFromManifestLevel(std::uint32_t level) const {
+  return static_cast<std::size_t>(level - levels_.size());
 }
 
 void LSMEngine::Put(std::string key, std::string value) {
@@ -88,22 +111,28 @@ std::optional<std::optional<std::string>> LSMEngine::Get(std::string_view key) c
     return mem;
   }
 
-  if (levels_.empty()) {
-    return std::nullopt;
-  }
-
-  // Level 0 holds the newest runs; higher levels hold older compacted data.
-  for (const Level& level : levels_) {
-    for (auto run_it = level.runs.rbegin(); run_it != level.runs.rend(); ++run_it) {
-      for (auto file_it = run_it->files.rbegin(); file_it != run_it->files.rend();
-           ++file_it) {
-        ++last_get_probe_stats_.sst_files_probed;
-        const auto result = (*file_it)->Get(key);
-        if (result.has_value()) {
-          return result;
+  auto probe_levels = [this, key](const std::vector<Level>& levels)
+      -> std::optional<std::optional<std::string>> {
+    for (const Level& level : levels) {
+      for (auto run_it = level.runs.rbegin(); run_it != level.runs.rend(); ++run_it) {
+        for (auto file_it = run_it->files.rbegin(); file_it != run_it->files.rend();
+             ++file_it) {
+          ++last_get_probe_stats_.sst_files_probed;
+          const auto result = (*file_it)->Get(key);
+          if (result.has_value()) {
+            return result;
+          }
         }
       }
     }
+    return std::nullopt;
+  };
+
+  if (const auto hit = probe_levels(levels_)) {
+    return hit;
+  }
+  if (const auto hit = probe_levels(vertical_levels_)) {
+    return hit;
   }
 
   return std::nullopt;
@@ -249,6 +278,7 @@ void LSMEngine::CompactHorizontalLevel(std::size_t level_idx) {
 void LSMEngine::SyncManifestFromLevels() {
   manifest_.next_sst_id = next_sst_id_;
   manifest_.k = k_;
+  manifest_.n = n_;
   manifest_.compaction_counters = compaction_counters_;
   manifest_.sst_entries.clear();
 
@@ -258,6 +288,18 @@ void LSMEngine::SyncManifestFromLevels() {
         SstEntry entry;
         entry.rel_path = RelPathFromFull(cfg_.data_dir, file->Path());
         entry.level = static_cast<std::uint32_t>(level_idx);
+        manifest_.sst_entries.push_back(std::move(entry));
+      }
+    }
+  }
+
+  for (std::size_t vertical_idx = 0; vertical_idx < vertical_levels_.size();
+       ++vertical_idx) {
+    for (const Run& run : vertical_levels_[vertical_idx].runs) {
+      for (const auto& file : run.files) {
+        SstEntry entry;
+        entry.rel_path = RelPathFromFull(cfg_.data_dir, file->Path());
+        entry.level = VerticalManifestLevelId(vertical_idx);
         manifest_.sst_entries.push_back(std::move(entry));
       }
     }
@@ -296,16 +338,26 @@ void LSMEngine::LoadFromManifest() {
     k_ = manifest_.k;
     compaction_counters_ = manifest_.compaction_counters;
   }
+  if (manifest_.n >= 1) {
+    n_ = manifest_.n;
+  }
 
   for (const auto& entry : manifest_.sst_entries) {
-    if (entry.level >= levels_.size()) {
-      throw std::runtime_error("MANIFEST SST level out of range");
-    }
-
     const std::string path = (fs::path(cfg_.data_dir) / entry.rel_path).string();
     Run run;
     run.files.push_back(
         std::make_unique<SSTable>(SSTable::Open(path)));
+
+    if (IsVerticalManifestLevel(entry.level)) {
+      const std::size_t vertical_idx = VerticalIndexFromManifestLevel(entry.level);
+      vertical_levels_[vertical_idx].runs.push_back(std::move(run));
+      continue;
+    }
+
+    if (entry.level >= levels_.size()) {
+      throw std::runtime_error("MANIFEST SST level out of range");
+    }
+
     levels_[entry.level].runs.push_back(std::move(run));
   }
 }

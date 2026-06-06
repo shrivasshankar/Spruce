@@ -89,6 +89,12 @@ Manifest LoadManifest(const std::string& data_dir) {
   }
   manifest.k = k;
 
+  std::int32_t n = 1;
+  if (!ReadI32(blob, pos, n)) {
+    throw std::runtime_error("failed to parse MANIFEST: " + path);
+  }
+  manifest.n = n;
+
   std::uint32_t counter_count = 0;
   if (!ReadU32(blob, pos, counter_count)) {
     throw std::runtime_error("failed to parse MANIFEST: " + path);
@@ -139,6 +145,7 @@ void SaveManifest(const std::string& data_dir, const Manifest& manifest) {
   AppendU64(blob, manifest.next_sst_id);
 
   AppendI32(blob, static_cast<std::int32_t>(manifest.k));
+  AppendI32(blob, static_cast<std::int32_t>(manifest.n));
   AppendU32(blob, static_cast<std::uint32_t>(manifest.compaction_counters.size()));
   for (int counter : manifest.compaction_counters) {
     AppendI32(blob, static_cast<std::int32_t>(counter));

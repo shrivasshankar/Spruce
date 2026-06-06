@@ -14,8 +14,10 @@ struct SstEntry {
 struct Manifest {
   std::uint64_t next_sst_id = 1;
   int k = 1;
+  int n = 1;  // horizontal part capacity scale (n * B); Vertiorizon §5.1
   std::vector<int> compaction_counters;
-  std::vector<SstEntry> sst_entries;  // oldest → newest
+  // level 0..ell-1 horizontal; ell..ell+1 vertical (L1v, L2v)
+  std::vector<SstEntry> sst_entries;
 };
 
 std::string ManifestPath(const std::string& data_dir);

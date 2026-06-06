@@ -243,31 +243,72 @@ int main() {
           lsm::Manifest m;
           m.next_sst_id = 3;
           m.k = 3;
+          m.n = 2;
           m.compaction_counters = {3, 3};
           m.sst_entries = {
               {"sst/000001.sst", 0},
               {"sst/000002.sst", 1},
+              {"sst/000003.sst", 2},  // vertical L1v when ell=2
           };
           lsm::SaveManifest(manifest_dir, m);
 
           const auto loaded = lsm::LoadManifest(manifest_dir);
-          if (loaded.next_sst_id != 3 || loaded.sst_entries.size() != 2) {
+          if (loaded.next_sst_id != 3 || loaded.sst_entries.size() != 3) {
             std::cerr << "fail: manifest load\n";
             return 1;
           }
-          if (loaded.k != 3 || loaded.compaction_counters != std::vector<int>({3, 3})) {
+          if (loaded.k != 3 || loaded.n != 2 ||
+              loaded.compaction_counters != std::vector<int>({3, 3})) {
             std::cerr << "fail: manifest counters\n";
             return 1;
           }
           if (loaded.sst_entries[0].rel_path != "sst/000001.sst" ||
               loaded.sst_entries[0].level != 0 ||
               loaded.sst_entries[1].rel_path != "sst/000002.sst" ||
-              loaded.sst_entries[1].level != 1) {
+              loaded.sst_entries[1].level != 1 ||
+              loaded.sst_entries[2].rel_path != "sst/000003.sst" ||
+              loaded.sst_entries[2].level != 2) {
             std::cerr << "fail: manifest entries\n";
             return 1;
           }
-    
+
           fs::remove_all(manifest_dir);
+        }
+
+        {
+          const std::string dir = "/tmp/spruce_vertical_scaffold_test";
+          fs::remove_all(dir);
+          fs::create_directories(dir + "/sst");
+          fs::create_directories(dir + "/wal");
+
+          const std::string sst_path = dir + "/sst/000001.sst";
+          {
+            std::ofstream out(sst_path, std::ios::binary);
+            lsm::SSTableWriter writer(cfg.block_size_bytes);
+            writer.Add("vertical_key", "vertical_val");
+            writer.Finish(out);
+          }
+
+          lsm::Manifest m;
+          m.next_sst_id = 2;
+          m.k = 3;
+          m.n = 2;
+          m.compaction_counters = {2, 2};
+          m.sst_entries = {{"sst/000001.sst", 2}};  // L1v for ell=2
+          lsm::SaveManifest(dir, m);
+
+          lsm::Config vertical_cfg;
+          vertical_cfg.data_dir = dir;
+          vertical_cfg.ell_horizontal = 2;
+          vertical_cfg.n_initial = 2;
+
+          lsm::LSMEngine db(vertical_cfg);
+          if (db.Get("vertical_key") != std::optional<std::string>("vertical_val")) {
+            std::cerr << "fail: vertical scaffold get\n";
+            return 1;
+          }
+
+          fs::remove_all(dir);
         }
 
         if (lsm::ComputeHorizontalTieringK(2, 6) != 3) {
