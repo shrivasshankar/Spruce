@@ -275,6 +275,67 @@ void LSMEngine::CompactHorizontalLevel(std::size_t level_idx) {
   }
 }
 
+void LSMEngine::CompactHorizontalToVertical() {
+  std::map<std::string, std::optional<std::string>> merged;
+  std::vector<std::string> absorbed_rel_paths;
+
+  for (auto level_it = levels_.rbegin(); level_it != levels_.rend(); ++level_it) {
+    for (auto run_it = level_it->runs.rbegin(); run_it != level_it->runs.rend();
+         ++run_it) {
+      for (const auto& file : run_it->files) {
+        absorbed_rel_paths.push_back(
+            RelPathFromFull(cfg_.data_dir, file->Path()));
+
+        for (const auto& [key, value] : file->Entries()) {
+          if (merged.find(key) == merged.end()) {
+            merged[key] = value;
+          }
+        }
+      }
+    }
+  }
+
+  for (Level& level : levels_) {
+    level.runs.clear();
+  }
+
+  if (merged.empty()) {
+    return;
+  }
+
+  const std::string path = SstPath(next_sst_id_);
+  {
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+      throw std::runtime_error("failed to open SST for horizontal->vertical: " + path);
+    }
+
+    SSTableWriter writer(cfg_.block_size_bytes);
+    for (const auto& [key, value] : merged) {
+      writer.Add(key, value);
+    }
+    writer.Finish(out);
+    if (!out.good()) {
+      throw std::runtime_error("horizontal->vertical SST write failed: " + path);
+    }
+    out.flush();
+    if (out.rdbuf()->pubsync() != 0) {
+      throw std::runtime_error("horizontal->vertical SST sync failed: " + path);
+    }
+  }
+
+  Run new_run;
+  new_run.files.push_back(std::make_unique<SSTable>(SSTable::Open(path)));
+  vertical_levels_[0].runs.push_back(std::move(new_run));
+
+  ++next_sst_id_;
+
+  for (const auto& absorbed : absorbed_rel_paths) {
+    std::error_code ec;
+    fs::remove(fs::path(cfg_.data_dir) / absorbed, ec);
+  }
+}
+
 void LSMEngine::SyncManifestFromLevels() {
   manifest_.next_sst_id = next_sst_id_;
   manifest_.k = k_;
@@ -327,6 +388,12 @@ void LSMEngine::MaybeCompact() {
     for (std::size_t j = 0; j <= i; ++j) {
       compaction_counters_[j] = reset_value;
     }
+  }
+
+  if (!compaction_counters_.empty() &&
+    compaction_counters_.back() == 0) {
+  CompactHorizontalToVertical();
+  compaction_counters_.assign(levels_.size(), k_);
   }
 }
 

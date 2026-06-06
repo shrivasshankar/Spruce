@@ -45,6 +45,7 @@ class LSMEngine {
   void Flush();
   void MaybeCompact();
   void CompactHorizontalLevel(std::size_t level_idx);
+  void CompactHorizontalToVertical();
   void InitHorizontalLevels();
   void InitVerticalLevels();
   void SyncManifestFromLevels();
