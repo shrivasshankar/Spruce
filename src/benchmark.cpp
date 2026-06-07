@@ -19,6 +19,7 @@ struct BenchMetrics {
   double read_amp = 0.0;
   std::size_t total_files = 0;
   std::size_t l2v_files = 0;
+  std::size_t bloom_skipped = 0;
   std::string layout_summary;
 };
 
@@ -132,6 +133,7 @@ bool RunWorkload(lsm::Config cfg, int num_keys, int value_size, BenchMetrics* me
 
   lsm::LSMEngine db(cfg);
   std::uint64_t probe_total = 0;
+  std::uint64_t bloom_skipped = 0;
   for (int i = 0; i < num_keys; ++i) {
     const std::string key = FormatKey(i);
     const auto value_opt = db.Get(key);
@@ -143,6 +145,7 @@ bool RunWorkload(lsm::Config cfg, int num_keys, int value_size, BenchMetrics* me
       return false;
     }
     probe_total += db.LastGetProbeStats().sst_files_probed;
+    bloom_skipped += db.LastGetProbeStats().sst_files_skipped_by_bloom;
   }
 
   const int layout_ell = cfg.growth_scheme == lsm::GrowthScheme::VerticalTiering
@@ -152,6 +155,7 @@ bool RunWorkload(lsm::Config cfg, int num_keys, int value_size, BenchMetrics* me
   metrics->write_amp = Ratio(sst_bytes, user_bytes);
   metrics->read_amp =
       static_cast<double>(probe_total) / static_cast<double>(num_keys);
+  metrics->bloom_skipped = static_cast<std::size_t>(bloom_skipped);
   metrics->total_files = manifest.sst_entries.size();
   metrics->l2v_files = 0;
   for (const auto& entry : manifest.sst_entries) {
@@ -180,7 +184,7 @@ bool RunSchemeComparison(int num_keys, int value_size) {
   std::cout << "Growth scheme comparison (same workload on each scheme)\n";
   std::cout << "  shared: B=1024 T=2 250 puts value_size=" << value_size << '\n';
   std::cout << std::fixed << std::setprecision(2);
-  std::cout << "  scheme               write_amp  read_amp  sst_files  layout\n";
+  std::cout << "  scheme               write_amp  read_amp  bloom_skip  sst_files  layout\n";
 
   for (const Row& row : rows) {
     lsm::Config cfg;
@@ -201,11 +205,12 @@ bool RunSchemeComparison(int num_keys, int value_size) {
 
     std::cout << "  " << std::setw(20) << std::left << GrowthSchemeName(row.scheme)
               << std::right << std::setw(9) << metrics.write_amp << 'x' << std::setw(10)
-              << metrics.read_amp << 'x' << std::setw(10) << metrics.total_files << "  "
+              << metrics.read_amp << 'x' << std::setw(11) << metrics.bloom_skipped
+              << std::setw(10) << metrics.total_files << "  "
               << metrics.layout_summary << '\n';
   }
 
-  std::cout << "  (lower read_amp = fewer SST probes per get; tradeoffs vary by workload)\n";
+  std::cout << "  (read_amp = SST files opened per get; bloom_skip = files skipped by filter)\n";
   return true;
 }
 
@@ -258,6 +263,7 @@ bool RunScenario(const char* title, lsm::Config cfg, int num_keys, int value_siz
 
   lsm::LSMEngine db(cfg);
   std::uint64_t probe_total = 0;
+  std::uint64_t bloom_skipped = 0;
   for (int i = 0; i < num_keys; ++i) {
     const std::string key = FormatKey(i);
     const auto value_opt = db.Get(key);
@@ -268,11 +274,13 @@ bool RunScenario(const char* title, lsm::Config cfg, int num_keys, int value_siz
       return false;
     }
     probe_total += db.LastGetProbeStats().sst_files_probed;
+    bloom_skipped += db.LastGetProbeStats().sst_files_skipped_by_bloom;
   }
 
   const double read_amp =
       static_cast<double>(probe_total) / static_cast<double>(num_keys);
   std::cout << "  read amp (avg SST files probed / get): " << read_amp << "x\n";
+  std::cout << "  bloom skipped (total files not probed): " << bloom_skipped << '\n';
 
   fs::remove_all(cfg.data_dir);
   return true;

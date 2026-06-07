@@ -163,6 +163,10 @@ std::optional<std::optional<std::string>> LSMEngine::Get(std::string_view key) c
       for (auto run_it = level.runs.rbegin(); run_it != level.runs.rend(); ++run_it) {
         for (auto file_it = run_it->files.rbegin(); file_it != run_it->files.rend();
              ++file_it) {
+          if (!(*file_it)->MayContain(key)) {
+            ++last_get_probe_stats_.sst_files_skipped_by_bloom;
+            continue;
+          }
           ++last_get_probe_stats_.sst_files_probed;
           const auto result = (*file_it)->Get(key);
           if (result.has_value()) {

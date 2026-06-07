@@ -28,7 +28,10 @@ Prints `memtable ok` when all unit checks pass (MemTable, WAL, SSTable, engine f
 Measures a 300-key workload with Figure 5 parameters (`ell=2`, `N/B=6`, `k=3`):
 
 - **Write amp** — SST bytes on disk divided by logical user bytes (Put key + value sizes). Compaction rewrites data, so this is above 1x.
-- **Read amp** — average number of SST files probed per point `Get` on a reopened database (MemTable miss path).
+- **Read amp** — average number of SST files **opened** per point `Get` after Bloom + min/max filtering.
+- **Bloom skip** — SST files rejected by min/max or Bloom filter without opening the file.
+
+Each SST stores a **Bloom filter** in the footer (built at flush, ~10 bits/key). On `Get`, Spruce checks min/max, then Bloom — only opens the file if the key might be present. No false negatives; false positives only.
 
 Example output shape:
 
@@ -36,11 +39,19 @@ Example output shape:
 Spruce amplification benchmark
   config: B=4096 ell=2 N/B=6 k=3
   workload: 300 puts, value_size=100
-  user bytes: ...
-  SST bytes on disk: ...
-  write amp (SST / user): ...x
-  read amp (avg SST files probed / get): ...x
+  read amp (avg SST files probed / get): 0.89x
+  bloom skipped (total files not probed): 228
 ```
+
+### Growth scheme comparison (250 puts, B=1024, T=2)
+
+| Scheme | Write amp | Read amp | Bloom skips (total) | SST files |
+|--------|-----------|----------|---------------------|-----------|
+| Vertiorizon | 1.11x | 1.00x | 600 | 5 |
+| Horizontal-tiering | 1.13x | 1.00x | 1640 | 13 |
+| Vertical-tiering | 1.12x | 1.00x | 840 | 7 |
+
+Insert-only synthetic workload. With Bloom filters, read amp counts only files actually opened (usually one per key). Fewer SST files (Vertiorizon: 5 vs HR-Tier: 13) means fewer filter checks and less compaction debt — the growth-scheme tradeoff shows up in file count and bloom skips, not just raw read amp.
 
 ## Architecture
 
@@ -71,7 +82,7 @@ db/
 └── sst/NNNNNN.sst
 ```
 
-**Read path:** MemTable → level 0 (newest run first) → level 1 → … First hit wins.
+**Read path:** MemTable → for each SST (newest first): min/max → Bloom → open file if maybe present. First hit wins.
 
 **Durability on flush:** fsync SST → compact (maybe) → fsync MANIFEST → truncate WAL.
 
@@ -98,16 +109,15 @@ src/           implementations + main.cpp tests + benchmark.cpp
 
 ## Status
 
-- MemTable, WAL, block SSTables, LSM engine glue
+- MemTable, WAL, block SSTables with **Bloom filters**, LSM engine glue
 - Vertiorizon horizontal tiering compaction (Algorithm 2)
 - MANIFEST v2 (SST levels + compaction counters)
 - Figure 5 counter replay test
 - Vertical tiering: horizontal→L1v handoff + partial L1v→L2v at capacity `n·T·B`
-- Write / read amplification benchmark
+- Growth-scheme comparison benchmark (Vertiorizon vs HR-Tier vs VT-Tier)
 
-**Not yet:** dynamic `n` growth when L2v fills (Phase 5b), self-tuning merge policy.
+**Not yet:** dynamic `n` growth when L2v fills, self-tuning merge policy.
 
 ## Roadmap
 
-1. Dynamic `n` when L2v reaches capacity
-2. Optional: CI, scan iterator, mmap read path
+1. Optional: CI, scan iterator, mmap read path

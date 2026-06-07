@@ -27,6 +27,7 @@ struct Level {
 
 struct GetProbeStats {
   std::size_t sst_files_probed = 0;
+  std::size_t sst_files_skipped_by_bloom = 0;
 };
 
 inline constexpr std::size_t kVerticalLevelCount = 2;

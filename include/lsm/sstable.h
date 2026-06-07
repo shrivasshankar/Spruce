@@ -1,4 +1,5 @@
 #pragma once
+#include "lsm/bloom.h"
 #include <cstdint>
 #include <optional>
 #include <ostream>
@@ -24,6 +25,7 @@ namespace lsm {
     std::string min_key;
     std::string max_key;
     std::uint64_t entry_count;
+    std::string bloom_blob;
     };
 
     class SSTableWriter {
@@ -50,6 +52,7 @@ namespace lsm {
          bool has_entries_ = false;
          std::uint64_t entry_count_ = 0;
          std::uint64_t next_offset_ = 0;
+         std::vector<std::string> bloom_keys_;
        };
        
        class SSTable {
@@ -59,6 +62,7 @@ namespace lsm {
          const std::string& Path() const { return path_; }
          const std::string& MinKey() const { return footer_.min_key; }
          const std::string& MaxKey() const { return footer_.max_key; }
+         bool MayContain(std::string_view key) const;
          std::uint64_t SizeBytes() const;
          // Sorted key -> value (nullopt = tombstone).
          std::vector<std::pair<std::string, std::optional<std::string>>> Entries() const;
@@ -66,6 +70,7 @@ namespace lsm {
         private:
          std::string path_;
          Footer footer_;
+         BloomFilter bloom_;
        };
 
     

@@ -57,6 +57,9 @@ std::string SerializeFooter(const lsm::Footer& footer) {
     AppendU64(blob, handle.offset);
     AppendU32(blob, handle.size);
   }
+
+  AppendU32(blob, static_cast<std::uint32_t>(footer.bloom_blob.size()));
+  blob.append(footer.bloom_blob);
   return blob;
 }
 
@@ -79,6 +82,18 @@ bool DeserializeFooter(std::string_view blob, lsm::Footer& out) {
     if (!ReadU64(blob, pos, handle.offset)) return false;
     if (!ReadU32(blob, pos, handle.size)) return false;
     out.index.push_back(std::move(handle));
+  }
+
+  if (pos < blob.size()) {
+    std::uint32_t bloom_len = 0;
+    if (!ReadU32(blob, pos, bloom_len)) {
+      return false;
+    }
+    if (pos + bloom_len > blob.size()) {
+      return false;
+    }
+    out.bloom_blob.assign(blob.data() + pos, bloom_len);
+    pos += bloom_len;
   }
 
   return pos == blob.size();
@@ -293,6 +308,7 @@ void SSTableWriter::Add(std::string key, std::optional<std::string> value) {
     if (key < min_key_) min_key_ = key;
     if (key > max_key_) max_key_ = key;
   }
+  bloom_keys_.push_back(key);
   ++entry_count_;
 }
 
@@ -303,11 +319,19 @@ void SSTableWriter::Finish(std::ostream& out) {
     out.write(block.data(), static_cast<std::streamsize>(block.size()));
   }
 
+  std::vector<std::string_view> bloom_key_views;
+  bloom_key_views.reserve(bloom_keys_.size());
+  for (const std::string& key : bloom_keys_) {
+    bloom_key_views.push_back(key);
+  }
+  const BloomFilter bloom = BloomFilter::Build(bloom_key_views);
+
   Footer footer{
       index_,
       has_entries_ ? min_key_ : "",
       has_entries_ ? max_key_ : "",
       entry_count_,
+      bloom.Serialize(),
   };
 
   const std::string footer_blob = SerializeFooter(footer);
@@ -365,16 +389,30 @@ SSTable SSTable::Open(const std::string& path) {
   SSTable table;
   table.path_ = path;
   table.footer_ = std::move(footer);
+  if (!table.footer_.bloom_blob.empty()) {
+    table.bloom_ = BloomFilter::Deserialize(table.footer_.bloom_blob);
+  }
   return table;
 }
 
-std::optional<std::optional<std::string>> SSTable::Get(std::string_view key) const {
+bool SSTable::MayContain(std::string_view key) const {
   if (footer_.entry_count == 0) {
-    return std::nullopt;
+    return false;
   }
 
   const std::string key_str(key);
   if (key_str < footer_.min_key || key_str > footer_.max_key) {
+    return false;
+  }
+
+  if (bloom_.Empty()) {
+    return true;
+  }
+  return bloom_.MayContain(key);
+}
+
+std::optional<std::optional<std::string>> SSTable::Get(std::string_view key) const {
+  if (!MayContain(key)) {
     return std::nullopt;
   }
 
