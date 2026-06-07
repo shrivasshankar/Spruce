@@ -57,6 +57,9 @@ namespace lsm {
          static SSTable Open(const std::string& path);
          std::optional<std::optional<std::string>> Get(std::string_view key) const;
          const std::string& Path() const { return path_; }
+         const std::string& MinKey() const { return footer_.min_key; }
+         const std::string& MaxKey() const { return footer_.max_key; }
+         std::uint64_t SizeBytes() const;
          // Sorted key -> value (nullopt = tombstone).
          std::vector<std::pair<std::string, std::optional<std::string>>> Entries() const;
        

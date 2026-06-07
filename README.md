@@ -102,11 +102,12 @@ src/           implementations + main.cpp tests + benchmark.cpp
 - Vertiorizon horizontal tiering compaction (Algorithm 2)
 - MANIFEST v2 (SST levels + compaction counters)
 - Figure 5 counter replay test
+- Vertical tiering: horizontal→L1v handoff + partial L1v→L2v at capacity `n·T·B`
 - Write / read amplification benchmark
 
-**Not yet:** vertical tiering when the last horizontal counter hits zero (Phase 5).
+**Not yet:** dynamic `n` growth when L2v fills (Phase 5b), self-tuning merge policy.
 
 ## Roadmap
 
-1. Vertical tiering (complete Vertiorizon horizontal → vertical handoff)
+1. Dynamic `n` when L2v reaches capacity
 2. Optional: CI, scan iterator, mmap read path

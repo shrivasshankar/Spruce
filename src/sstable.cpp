@@ -1,9 +1,12 @@
 #include "lsm/sstable.h"
 #include <cstring>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <ostream>
+
+namespace fs = std::filesystem;
 
 namespace {
 
@@ -417,6 +420,15 @@ std::vector<std::pair<std::string, std::optional<std::string>>> SSTable::Entries
   }
 
   return rows;
+}
+
+std::uint64_t SSTable::SizeBytes() const {
+  std::error_code ec;
+  const auto sz = fs::file_size(path_, ec);
+  if (ec) {
+    return 0;
+  }
+  return static_cast<std::uint64_t>(sz);
 }
 
 }  // namespace lsm

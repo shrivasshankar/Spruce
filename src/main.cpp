@@ -311,6 +311,70 @@ int main() {
           fs::remove_all(dir);
         }
 
+        {
+          const std::string dir = "/tmp/spruce_vertical_handoff_test";
+          fs::remove_all(dir);
+          lsm::Config cfg = Figure5Config(dir);
+          cfg.n_initial = 1;
+          cfg.T = 20;  // L1v cap = 20*64 = 1280 B, fits one handoff SST (~675 B)
+
+          {
+            lsm::LSMEngine db(cfg);
+            PutFlushBatch(db, 0, 18);  // 6 flushes -> one horizontal->vertical handoff
+          }
+
+          const auto manifest = lsm::LoadManifest(dir);
+          if (CountSstsAtLevel(manifest, 2) < 1) {
+            std::cerr << "fail: vertical handoff missing L1v SST\n";
+            return 1;
+          }
+          if (CountSstsAtLevel(manifest, 1) != 0) {
+            std::cerr << "fail: vertical handoff horizontal L1 not empty\n";
+            return 1;
+          }
+
+          lsm::LSMEngine db(cfg);
+          for (int i = 0; i < 18; ++i) {
+            if (db.Get("key" + std::to_string(i)) !=
+                std::optional<std::string>(std::string(25, 'x'))) {
+              std::cerr << "fail: vertical handoff get key" << i << '\n';
+              return 1;
+            }
+          }
+
+          fs::remove_all(dir);
+        }
+
+        {
+          const std::string dir = "/tmp/spruce_vertical_overflow_test";
+          fs::remove_all(dir);
+          lsm::Config cfg = Figure5Config(dir);
+          cfg.n_initial = 1;
+          cfg.T = 2;  // L1v cap = 2*B = 128 bytes with B=64
+
+          {
+            lsm::LSMEngine db(cfg);
+            PutFlushBatch(db, 0, 18);  // handoff + L1v overflow -> L2v
+          }
+
+          const auto manifest = lsm::LoadManifest(dir);
+          if (CountSstsAtLevel(manifest, 3) < 1) {
+            std::cerr << "fail: vertical overflow missing L2v SST\n";
+            return 1;
+          }
+
+          lsm::LSMEngine db(cfg);
+          for (int i = 0; i < 18; ++i) {
+            if (db.Get("key" + std::to_string(i)) !=
+                std::optional<std::string>(std::string(25, 'x'))) {
+              std::cerr << "fail: vertical overflow get key" << i << '\n';
+              return 1;
+            }
+          }
+
+          fs::remove_all(dir);
+        }
+
         if (lsm::ComputeHorizontalTieringK(2, 6) != 3) {
           std::cerr << "fail: Figure 5 k init (ell=2, N/B=6 -> k=3)\n";
           return 1;

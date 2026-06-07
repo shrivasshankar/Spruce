@@ -30,6 +30,33 @@ std::string RelPathFromFull(const std::string& data_dir, const std::string& full
   return fs::relative(full_path, data_dir).string();
 }
 
+bool KeyRangesOverlap(const std::string& a_min, const std::string& a_max,
+                      const std::string& b_min, const std::string& b_max) {
+  return !(a_max < b_min || b_max < a_min);
+}
+
+bool RunKeyRange(const lsm::Run& run, std::string& min_key, std::string& max_key) {
+  bool any = false;
+  for (const auto& file : run.files) {
+    if (file->MinKey().empty() && file->MaxKey().empty()) {
+      continue;
+    }
+    if (!any) {
+      min_key = file->MinKey();
+      max_key = file->MaxKey();
+      any = true;
+      continue;
+    }
+    if (file->MinKey() < min_key) {
+      min_key = file->MinKey();
+    }
+    if (file->MaxKey() > max_key) {
+      max_key = file->MaxKey();
+    }
+  }
+  return any;
+}
+
 }  // namespace
 
 namespace lsm {
@@ -56,10 +83,29 @@ LSMEngine::LSMEngine(Config cfg)
   fs::create_directories(fs::path(cfg_.data_dir) / "sst");
   fs::create_directories(fs::path(cfg_.data_dir) / "wal");
 
-  InitHorizontalLevels();
-  InitVerticalLevels();
+  InitForGrowthScheme();
   LoadFromManifest();
   ReplayWal(WalPath(), memtable_);
+}
+
+void LSMEngine::InitForGrowthScheme() {
+  if (cfg_.growth_scheme == GrowthScheme::VerticalTiering) {
+    if (cfg_.vertical_scheme_levels < 2) {
+      throw std::runtime_error("vertical_scheme_levels must be >= 2");
+    }
+    levels_.resize(static_cast<std::size_t>(cfg_.vertical_scheme_levels));
+    vertical_levels_.clear();
+    compaction_counters_.clear();
+    n_ = cfg_.n_initial;
+    return;
+  }
+
+  InitHorizontalLevels();
+  if (cfg_.growth_scheme == GrowthScheme::Vertiorizon) {
+    InitVerticalLevels();
+  } else {
+    vertical_levels_.clear();
+  }
 }
 
 void LSMEngine::InitHorizontalLevels() {
@@ -334,6 +380,169 @@ void LSMEngine::CompactHorizontalToVertical() {
     std::error_code ec;
     fs::remove(fs::path(cfg_.data_dir) / absorbed, ec);
   }
+
+  MaybeCompactVertical();
+}
+
+std::uint64_t LSMEngine::HorizontalLevelBytes(std::size_t level_idx) const {
+  if (level_idx >= levels_.size()) {
+    return 0;
+  }
+
+  std::uint64_t total = 0;
+  for (const Run& run : levels_[level_idx].runs) {
+    for (const auto& file : run.files) {
+      total += file->SizeBytes();
+    }
+  }
+  return total;
+}
+
+std::uint64_t LSMEngine::VerticalSchemeLevelCapacity(std::size_t level_idx) const {
+  const std::uint64_t b = cfg_.buffer_size_bytes;
+  std::uint64_t cap = b;
+  for (std::size_t i = 0; i < level_idx; ++i) {
+    cap *= static_cast<std::uint64_t>(cfg_.T);
+  }
+  return cap;
+}
+
+void LSMEngine::MaybeCompactVerticalScheme() {
+  for (std::size_t i = 0; i + 1 < levels_.size(); ++i) {
+    if (HorizontalLevelBytes(i) <= VerticalSchemeLevelCapacity(i)) {
+      continue;
+    }
+    CompactHorizontalLevel(i);
+  }
+}
+
+std::uint64_t LSMEngine::VerticalLevelBytes(std::size_t vertical_idx) const {
+  if (vertical_idx >= vertical_levels_.size()) {
+    return 0;
+  }
+
+  std::uint64_t total = 0;
+  for (const Run& run : vertical_levels_[vertical_idx].runs) {
+    for (const auto& file : run.files) {
+      total += file->SizeBytes();
+    }
+  }
+  return total;
+}
+
+std::uint64_t LSMEngine::VerticalLevelCapacity(std::size_t vertical_idx) const {
+  const std::uint64_t b = cfg_.buffer_size_bytes;
+  const std::uint64_t t = static_cast<std::uint64_t>(cfg_.T);
+  const std::uint64_t n = static_cast<std::uint64_t>(n_);
+
+  if (vertical_idx == 0) {
+    return n * t * b;
+  }
+  return n * t * t * b;
+}
+
+void LSMEngine::CompactVerticalPartial() {
+  if (vertical_levels_.size() < 2) {
+    return;
+  }
+
+  Level& l1v = vertical_levels_[0];
+  if (l1v.runs.empty()) {
+    return;
+  }
+
+  Run oldest = std::move(l1v.runs.front());
+  l1v.runs.erase(l1v.runs.begin());
+
+  std::string src_min;
+  std::string src_max;
+  if (!RunKeyRange(oldest, src_min, src_max)) {
+    return;
+  }
+
+  Level& l2v = vertical_levels_[1];
+  std::vector<std::size_t> overlapping_run_indices;
+  for (std::size_t i = 0; i < l2v.runs.size(); ++i) {
+    std::string run_min;
+    std::string run_max;
+    if (RunKeyRange(l2v.runs[i], run_min, run_max) &&
+        KeyRangesOverlap(src_min, src_max, run_min, run_max)) {
+      overlapping_run_indices.push_back(i);
+    }
+  }
+
+  std::map<std::string, std::optional<std::string>> merged;
+  std::vector<std::string> absorbed_rel_paths;
+
+  auto absorb_file = [&](const SSTable& file) {
+    absorbed_rel_paths.push_back(RelPathFromFull(cfg_.data_dir, file.Path()));
+    for (const auto& [key, value] : file.Entries()) {
+      if (merged.find(key) == merged.end()) {
+        merged[key] = value;
+      }
+    }
+  };
+
+  for (auto file_it = oldest.files.rbegin(); file_it != oldest.files.rend(); ++file_it) {
+    absorb_file(**file_it);
+  }
+
+  for (auto idx_it = overlapping_run_indices.rbegin();
+       idx_it != overlapping_run_indices.rend(); ++idx_it) {
+    const Run& run = l2v.runs[*idx_it];
+    for (auto file_it = run.files.rbegin(); file_it != run.files.rend(); ++file_it) {
+      absorb_file(**file_it);
+    }
+  }
+
+  for (auto idx_it = overlapping_run_indices.rbegin();
+       idx_it != overlapping_run_indices.rend(); ++idx_it) {
+    l2v.runs.erase(l2v.runs.begin() + static_cast<std::ptrdiff_t>(*idx_it));
+  }
+
+  if (merged.empty()) {
+    return;
+  }
+
+  const std::string path = SstPath(next_sst_id_);
+  {
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+      throw std::runtime_error("failed to open SST for vertical compaction: " + path);
+    }
+
+    SSTableWriter writer(cfg_.block_size_bytes);
+    for (const auto& [key, value] : merged) {
+      writer.Add(key, value);
+    }
+    writer.Finish(out);
+    if (!out.good()) {
+      throw std::runtime_error("vertical compaction SST write failed: " + path);
+    }
+    out.flush();
+    if (out.rdbuf()->pubsync() != 0) {
+      throw std::runtime_error("vertical compaction SST sync failed: " + path);
+    }
+  }
+
+  Run new_run;
+  new_run.files.push_back(std::make_unique<SSTable>(SSTable::Open(path)));
+  l2v.runs.push_back(std::move(new_run));
+
+  ++next_sst_id_;
+
+  for (const auto& absorbed : absorbed_rel_paths) {
+    std::error_code ec;
+    fs::remove(fs::path(cfg_.data_dir) / absorbed, ec);
+  }
+}
+
+void LSMEngine::MaybeCompactVertical() {
+  while (vertical_levels_.size() >= 2 &&
+         VerticalLevelBytes(0) > VerticalLevelCapacity(0) &&
+         !vertical_levels_[0].runs.empty()) {
+    CompactVerticalPartial();
+  }
 }
 
 void LSMEngine::SyncManifestFromLevels() {
@@ -368,6 +577,11 @@ void LSMEngine::SyncManifestFromLevels() {
 }
 
 void LSMEngine::MaybeCompact() {
+  if (cfg_.growth_scheme == GrowthScheme::VerticalTiering) {
+    MaybeCompactVerticalScheme();
+    return;
+  }
+
   if (compaction_counters_.empty()) {
     return;
   }
@@ -390,11 +604,15 @@ void LSMEngine::MaybeCompact() {
     }
   }
 
-  if (!compaction_counters_.empty() &&
-    compaction_counters_.back() == 0) {
-  CompactHorizontalToVertical();
-  compaction_counters_.assign(levels_.size(), k_);
+  if (compaction_counters_.empty() ||
+      compaction_counters_.back() != 0) {
+    return;
   }
+
+  if (cfg_.growth_scheme == GrowthScheme::Vertiorizon) {
+    CompactHorizontalToVertical();
+  }
+  compaction_counters_.assign(levels_.size(), k_);
 }
 
 void LSMEngine::LoadFromManifest() {
