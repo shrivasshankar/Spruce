@@ -6,5 +6,11 @@ build/
 compile_commands.json
 db/
 
+# Editor / IDE
+.vscode/
+.idea/
+*.user
+.cursor/
+
 # Local LLM session handoff — not for the public repo
 docs/LLM_CONTEXT.md

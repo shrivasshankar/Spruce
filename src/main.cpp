@@ -182,17 +182,27 @@ int main() {
       return 1;
     }
 
-    lsm::LSMEngine db(cfg);
-    db.Put("engine_key", "engine_val");
-    if (db.Get("engine_key") != std::optional<std::string>("engine_val")) {
-      std::cerr << "fail: engine get\n";
-      return 1;
-    }
-    db.Delete("engine_key");
-    const auto deleted = db.Get("engine_key");
-    if (!deleted.has_value() || deleted->has_value()) {
-      std::cerr << "fail: engine delete\n";
-      return 1;
+    {
+      const std::string engine_basic_dir = "/tmp/spruce_engine_basic_test";
+      fs::remove_all(engine_basic_dir);
+
+      lsm::Config engine_basic_cfg;
+      engine_basic_cfg.data_dir = engine_basic_dir;
+
+      lsm::LSMEngine db(engine_basic_cfg);
+      db.Put("engine_key", "engine_val");
+      if (db.Get("engine_key") != std::optional<std::string>("engine_val")) {
+        std::cerr << "fail: engine get\n";
+        return 1;
+      }
+      db.Delete("engine_key");
+      const auto deleted = db.Get("engine_key");
+      if (!deleted.has_value() || deleted->has_value()) {
+        std::cerr << "fail: engine delete\n";
+        return 1;
+      }
+
+      fs::remove_all(engine_basic_dir);
     }
 
     const std::string engine_dir = "/tmp/spruce_engine_test";

@@ -251,12 +251,12 @@ void LSMEngine::Flush() {
   ++next_sst_id_;
 
   memtable_ = MemTable(cfg_.buffer_size_bytes);
-  wal_.Truncate();
 
   MaybeCompact();
 
   SyncManifestFromLevels();
   SaveManifest(cfg_.data_dir, manifest_);
+  wal_.Truncate();
 }
 
 void LSMEngine::CompactHorizontalLevel(std::size_t level_idx) {
@@ -455,14 +455,22 @@ void LSMEngine::CompactVerticalPartial() {
     return;
   }
 
-  Run oldest = std::move(l1v.runs.front());
-  l1v.runs.erase(l1v.runs.begin());
-
   std::string src_min;
   std::string src_max;
-  if (!RunKeyRange(oldest, src_min, src_max)) {
+  if (!RunKeyRange(l1v.runs.front(), src_min, src_max)) {
+    Run empty_run = std::move(l1v.runs.front());
+    l1v.runs.erase(l1v.runs.begin());
+    for (const auto& file : empty_run.files) {
+      std::error_code ec;
+      fs::remove(fs::path(cfg_.data_dir) /
+                     RelPathFromFull(cfg_.data_dir, file->Path()),
+                 ec);
+    }
     return;
   }
+
+  Run oldest = std::move(l1v.runs.front());
+  l1v.runs.erase(l1v.runs.begin());
 
   Level& l2v = vertical_levels_[1];
   std::vector<std::size_t> overlapping_run_indices;

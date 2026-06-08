@@ -159,18 +159,27 @@ void SaveManifest(const std::string& data_dir, const Manifest& manifest) {
   }
 
   const std::string path = ManifestPath(data_dir);
-  std::ofstream out(path, std::ios::binary | std::ios::trunc);
-  if (!out) {
-    throw std::runtime_error("failed to write MANIFEST: " + path);
-  }
-  out.write(blob.data(), static_cast<std::streamsize>(blob.size()));
-  if (!out.good()) {
-    throw std::runtime_error("MANIFEST write failed: " + path);
+  const std::string tmp_path = path + ".tmp";
+  {
+    std::ofstream out(tmp_path, std::ios::binary | std::ios::trunc);
+    if (!out) {
+      throw std::runtime_error("failed to write MANIFEST: " + tmp_path);
+    }
+    out.write(blob.data(), static_cast<std::streamsize>(blob.size()));
+    if (!out.good()) {
+      throw std::runtime_error("MANIFEST write failed: " + tmp_path);
+    }
+
+    out.flush();
+    if (out.rdbuf()->pubsync() != 0) {
+      throw std::runtime_error("MANIFEST sync failed: " + tmp_path);
+    }
   }
 
-  out.flush();
-  if (out.rdbuf()->pubsync() != 0) {
-    throw std::runtime_error("MANIFEST sync failed: " + path);
+  std::error_code ec;
+  fs::rename(tmp_path, path, ec);
+  if (ec) {
+    throw std::runtime_error("failed to install MANIFEST: " + path);
   }
 }
 
