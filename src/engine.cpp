@@ -256,6 +256,16 @@ void LSMEngine::Flush() {
 
   SyncManifestFromLevels();
   SaveManifest(cfg_.data_dir, manifest_);
+
+  // The new MANIFEST no longer references the absorbed SSTs, so it is now
+  // safe to delete them. Doing this before SaveManifest would let a crash
+  // strand a MANIFEST that points at missing files.
+  for (const auto& rel_path : pending_sst_removals_) {
+    std::error_code ec;
+    fs::remove(fs::path(cfg_.data_dir) / rel_path, ec);
+  }
+  pending_sst_removals_.clear();
+
   wal_.Truncate();
 }
 
@@ -287,6 +297,9 @@ void LSMEngine::CompactHorizontalLevel(std::size_t level_idx) {
   }
 
   src.runs.clear();
+  pending_sst_removals_.insert(pending_sst_removals_.end(),
+                               absorbed_rel_paths.begin(),
+                               absorbed_rel_paths.end());
 
   if (merged.empty()) {
     return;
@@ -318,11 +331,6 @@ void LSMEngine::CompactHorizontalLevel(std::size_t level_idx) {
   levels_[level_idx + 1].runs.push_back(std::move(new_run));
 
   ++next_sst_id_;
-
-  for (const auto& absorbed : absorbed_rel_paths) {
-    std::error_code ec;
-    fs::remove(fs::path(cfg_.data_dir) / absorbed, ec);
-  }
 }
 
 void LSMEngine::CompactHorizontalToVertical() {
@@ -348,6 +356,9 @@ void LSMEngine::CompactHorizontalToVertical() {
   for (Level& level : levels_) {
     level.runs.clear();
   }
+  pending_sst_removals_.insert(pending_sst_removals_.end(),
+                               absorbed_rel_paths.begin(),
+                               absorbed_rel_paths.end());
 
   if (merged.empty()) {
     return;
@@ -379,11 +390,6 @@ void LSMEngine::CompactHorizontalToVertical() {
   vertical_levels_[0].runs.push_back(std::move(new_run));
 
   ++next_sst_id_;
-
-  for (const auto& absorbed : absorbed_rel_paths) {
-    std::error_code ec;
-    fs::remove(fs::path(cfg_.data_dir) / absorbed, ec);
-  }
 
   MaybeCompactVertical();
 }
@@ -461,10 +467,8 @@ void LSMEngine::CompactVerticalPartial() {
     Run empty_run = std::move(l1v.runs.front());
     l1v.runs.erase(l1v.runs.begin());
     for (const auto& file : empty_run.files) {
-      std::error_code ec;
-      fs::remove(fs::path(cfg_.data_dir) /
-                     RelPathFromFull(cfg_.data_dir, file->Path()),
-                 ec);
+      pending_sst_removals_.push_back(
+          RelPathFromFull(cfg_.data_dir, file->Path()));
     }
     return;
   }
@@ -512,6 +516,10 @@ void LSMEngine::CompactVerticalPartial() {
     l2v.runs.erase(l2v.runs.begin() + static_cast<std::ptrdiff_t>(*idx_it));
   }
 
+  pending_sst_removals_.insert(pending_sst_removals_.end(),
+                               absorbed_rel_paths.begin(),
+                               absorbed_rel_paths.end());
+
   if (merged.empty()) {
     return;
   }
@@ -542,11 +550,6 @@ void LSMEngine::CompactVerticalPartial() {
   l2v.runs.push_back(std::move(new_run));
 
   ++next_sst_id_;
-
-  for (const auto& absorbed : absorbed_rel_paths) {
-    std::error_code ec;
-    fs::remove(fs::path(cfg_.data_dir) / absorbed, ec);
-  }
 }
 
 void LSMEngine::MaybeCompactVertical() {

@@ -121,6 +121,12 @@ namespace lsm {
         payload.append(value->data(), value->size());
       }
       if (Crc32(payload.data(), payload.size()) != stored_crc) break;
+      // value_len == 0 is ambiguous on disk: a Put with an empty value and a
+      // Delete both omit value bytes. A Put always carries a value, so
+      // reconstruct it as "" instead of leaving the optional empty.
+      if (static_cast<WalOp>(type_raw) == WalOp::kPut && !value.has_value()) {
+        value = "";
+      }
       records.push_back(WalRecord{static_cast<WalOp>(type_raw), std::move(key), value});
     }
     return records;

@@ -121,6 +121,7 @@ int main() {
     w.AppendPut("x", "hello");
     w.AppendDelete("y");
     w.AppendPut("z", "3");
+    w.AppendPut("empty", "");  // empty value must replay as "", not crash
     }
     lsm::MemTable recovered(cfg.buffer_size_bytes);
     lsm::ReplayWal(wal_path, recovered);
@@ -135,6 +136,10 @@ int main() {
       }
       if (recovered.Get("z") != std::optional<std::string>("3")) {
         std::cerr << "fail: replay z\n";
+        return 1;
+      }
+      if (recovered.Get("empty") != std::optional<std::string>("")) {
+        std::cerr << "fail: replay empty-value put\n";
         return 1;
       }
 
@@ -291,9 +296,9 @@ int main() {
           fs::create_directories(dir + "/sst");
           fs::create_directories(dir + "/wal");
 
-          const std::string sst_path = dir + "/sst/000001.sst";
+          const std::string scaffold_sst_path = dir + "/sst/000001.sst";
           {
-            std::ofstream out(sst_path, std::ios::binary);
+            std::ofstream out(scaffold_sst_path, std::ios::binary);
             lsm::SSTableWriter writer(cfg.block_size_bytes);
             writer.Add("vertical_key", "vertical_val");
             writer.Finish(out);
@@ -324,12 +329,12 @@ int main() {
         {
           const std::string dir = "/tmp/spruce_vertical_handoff_test";
           fs::remove_all(dir);
-          lsm::Config cfg = Figure5Config(dir);
-          cfg.n_initial = 1;
-          cfg.T = 20;  // L1v cap = 20*64 = 1280 B, fits one handoff SST (~675 B)
+          lsm::Config handoff_cfg = Figure5Config(dir);
+          handoff_cfg.n_initial = 1;
+          handoff_cfg.T = 20;  // L1v cap = 20*64 = 1280 B, fits one handoff SST (~675 B)
 
           {
-            lsm::LSMEngine db(cfg);
+            lsm::LSMEngine db(handoff_cfg);
             PutFlushBatch(db, 0, 18);  // 6 flushes -> one horizontal->vertical handoff
           }
 
@@ -343,7 +348,7 @@ int main() {
             return 1;
           }
 
-          lsm::LSMEngine db(cfg);
+          lsm::LSMEngine db(handoff_cfg);
           for (int i = 0; i < 18; ++i) {
             if (db.Get("key" + std::to_string(i)) !=
                 std::optional<std::string>(std::string(25, 'x'))) {
@@ -358,12 +363,12 @@ int main() {
         {
           const std::string dir = "/tmp/spruce_vertical_overflow_test";
           fs::remove_all(dir);
-          lsm::Config cfg = Figure5Config(dir);
-          cfg.n_initial = 1;
-          cfg.T = 2;  // L1v cap = 2*B = 128 bytes with B=64
+          lsm::Config overflow_cfg = Figure5Config(dir);
+          overflow_cfg.n_initial = 1;
+          overflow_cfg.T = 2;  // L1v cap = 2*B = 128 bytes with B=64
 
           {
-            lsm::LSMEngine db(cfg);
+            lsm::LSMEngine db(overflow_cfg);
             PutFlushBatch(db, 0, 18);  // handoff + L1v overflow -> L2v
           }
 
@@ -373,7 +378,7 @@ int main() {
             return 1;
           }
 
-          lsm::LSMEngine db(cfg);
+          lsm::LSMEngine db(overflow_cfg);
           for (int i = 0; i < 18; ++i) {
             if (db.Get("key" + std::to_string(i)) !=
                 std::optional<std::string>(std::string(25, 'x'))) {
@@ -427,12 +432,12 @@ int main() {
         {
           const std::string dir = "/tmp/spruce_figure5_test";
           fs::remove_all(dir);
-          const lsm::Config cfg = Figure5Config(dir);
+          const lsm::Config figure5_cfg = Figure5Config(dir);
 
           // Figure 5: ell=2, N/B=6 -> k=3. Each flush decrements C[0].
           // Flush 1: C=[2,3], one run on level 0.
           {
-            lsm::LSMEngine db(cfg);
+            lsm::LSMEngine db(figure5_cfg);
             PutFlushBatch(db, 0, 3);
           }
           {
@@ -454,7 +459,7 @@ int main() {
 
           // Flush 2: C=[1,3], two runs on level 0.
           {
-            lsm::LSMEngine db(cfg);
+            lsm::LSMEngine db(figure5_cfg);
             PutFlushBatch(db, 3, 3);
           }
           {
@@ -472,7 +477,7 @@ int main() {
 
           // Flush 3: C[0] hits 0 -> compact level 0 -> C=[2,2], one run on level 1.
           {
-            lsm::LSMEngine db(cfg);
+            lsm::LSMEngine db(figure5_cfg);
             PutFlushBatch(db, 6, 3);
           }
           {
@@ -490,7 +495,7 @@ int main() {
 
           // Reopen restores counters + tiered layout; all keys still readable.
           {
-            lsm::LSMEngine db(cfg);
+            lsm::LSMEngine db(figure5_cfg);
             const auto manifest = lsm::LoadManifest(dir);
             if (!CountersEqual(manifest, {2, 2})) {
               std::cerr << "fail: figure5 counters after reopen\n";
@@ -530,27 +535,27 @@ int main() {
         }
 
         {
-          lsm::Config cfg;
-          cfg.data_dir = "/tmp/spruce_reopen_compact_test";
-          cfg.buffer_size_bytes = 32;
-          cfg.estimated_data_buffers = 6;
-          cfg.ell_horizontal = 2;
-          std::filesystem::remove_all(cfg.data_dir);
+          lsm::Config reopen_cfg;
+          reopen_cfg.data_dir = "/tmp/spruce_reopen_compact_test";
+          reopen_cfg.buffer_size_bytes = 32;
+          reopen_cfg.estimated_data_buffers = 6;
+          reopen_cfg.ell_horizontal = 2;
+          std::filesystem::remove_all(reopen_cfg.data_dir);
 
           {
-            lsm::LSMEngine db(cfg);
+            lsm::LSMEngine db(reopen_cfg);
             for (int i = 0; i < 9; ++i) {
               db.Put("key" + std::to_string(i), std::string(25, 'x'));
             }
           }
 
-          lsm::LSMEngine reopened(cfg);
+          lsm::LSMEngine reopened(reopen_cfg);
           if (reopened.Get("key0") != std::optional<std::string>(std::string(25, 'x'))) {
             std::cerr << "fail: reopen after compaction\n";
             return 1;
           }
 
-          std::filesystem::remove_all(cfg.data_dir);
+          std::filesystem::remove_all(reopen_cfg.data_dir);
         }
 
     std::cout << "memtable ok\n";

@@ -73,6 +73,10 @@ class LSMEngine {
   std::vector<Level> levels_;
   std::vector<Level> vertical_levels_;    // L1v, L2v (Vertiorizon vertical part)
   std::vector<int> compaction_counters_;  // current C_i; initialized to k_
+  // SSTs absorbed by a compaction, kept on disk until the MANIFEST that
+  // drops them is durable (deleted at the end of Flush()). Deleting earlier
+  // would leave a crash window where the old MANIFEST points at missing files.
+  std::vector<std::string> pending_sst_removals_;
   int k_ = 1;                             // reset target from Lemma 4.1
   int n_ = 1;                             // horizontal capacity scale; persisted in MANIFEST
   std::uint64_t next_sst_id_ = 1;
