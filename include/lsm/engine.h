@@ -42,6 +42,7 @@ class LSMEngine {
   GetProbeStats LastGetProbeStats() const { return last_get_probe_stats_; }
 
  private:
+  void MaybeSyncWal();
   void MaybeFlush();
   void Flush();
   void MaybeCompact();
@@ -78,6 +79,7 @@ class LSMEngine {
   // would leave a crash window where the old MANIFEST points at missing files.
   std::vector<std::string> pending_sst_removals_;
   int k_ = 1;                             // reset target from Lemma 4.1
+  std::size_t writes_since_wal_sync_ = 0;
   int n_ = 1;                             // horizontal capacity scale; persisted in MANIFEST
   std::uint64_t next_sst_id_ = 1;
   mutable GetProbeStats last_get_probe_stats_;

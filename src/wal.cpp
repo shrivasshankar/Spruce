@@ -1,6 +1,7 @@
 #include "lsm/wal.h"
 #include <stdexcept>
 #include <string_view>
+#include "lsm/durability.h"
 #include "lsm/memtable.h"
 #include <array>
 #include <cstddef>
@@ -41,10 +42,18 @@ namespace {
 
 namespace lsm {
   WalWriter::WalWriter(std::string path) : path_(std::move(path)) {
-    fs::create_directories(fs::path(path_).parent_path());
+    const fs::path dir = fs::path(path_).parent_path();
+    fs::create_directories(dir);
+    const bool is_new = !fs::exists(path_);
     file_.open(path_, std::ios::binary | std::ios::app);
     if (!file_) {
       throw std::runtime_error("failed to open WAL: " + path_);
+    }
+    if (is_new) {
+      // A record is only recoverable if the WAL's own directory entry survives
+      // the crash, so persist the name before anything is written into it.
+      file_.flush();
+      durability::SyncDir(dir.string());
     }
   }
 
@@ -144,10 +153,14 @@ namespace lsm {
   }
 
   void WalWriter::Sync() {
+    // Push the userspace buffer into the kernel...
     file_.flush();
-    if (file_.rdbuf()->pubsync() != 0) {
-      throw std::runtime_error("WAL sync failed");
+    if (!file_) {
+      throw std::runtime_error("WAL flush failed: " + path_);
     }
+    // ...then force the kernel's page cache onto the media. Without this the
+    // record is only in RAM and a power loss takes back an acknowledged write.
+    durability::SyncPath(path_);
   }
   void WalWriter::Truncate() {
     file_.close();
@@ -156,6 +169,10 @@ namespace lsm {
       throw std::runtime_error("failed to truncate WAL: " + path_);
     }
     file_.close();
+    // The truncation itself has to reach the media before it counts: otherwise
+    // a crash can resurrect the old records and replay writes that the SSTs
+    // already contain.
+    durability::SyncPath(path_);
     file_.open(path_, std::ios::binary | std::ios::app);
     if (!file_) {
       throw std::runtime_error("failed to reopen WAL: " + path_);

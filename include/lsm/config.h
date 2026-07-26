@@ -8,6 +8,15 @@ enum class GrowthScheme {
   HorizontalTiering, // Algorithm 2 only, no vertical handoff (paper HR-Tier)
   VerticalTiering,   // fixed capacities B*T^i, tiering merge (paper VT-Tier)
 };
+// How often the WAL is forced to stable storage. SSTables and the MANIFEST are
+// always synced regardless, since they are the durability boundary that lets
+// the WAL be truncated. This only trades how many recent writes a power loss
+// can take back.
+enum class WalSyncPolicy {
+  EveryWrite,  // sync each Put/Delete: no acknowledged write is ever lost
+  EveryN,      // sync every wal_sync_interval writes (group commit)
+  Never,       // never sync: fastest, loses everything since the last flush
+};
 struct Config {
   std::string data_dir = "db";
   size_t buffer_size_bytes = 4 * 1024 * 1024;  // B — MemTable cap
@@ -19,5 +28,7 @@ struct Config {
   int vertical_scheme_levels = 4;                // levels for VerticalTiering mode
   GrowthScheme growth_scheme = GrowthScheme::Vertiorizon;
   MergePolicy merge_policy = MergePolicy::Tiering;
+  WalSyncPolicy wal_sync_policy = WalSyncPolicy::EveryWrite;
+  size_t wal_sync_interval = 100;  // writes per sync when policy is EveryN
 };
 } 

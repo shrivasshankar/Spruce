@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include "lsm/durability.h"
 
 namespace fs = std::filesystem;
 
@@ -171,16 +172,25 @@ void SaveManifest(const std::string& data_dir, const Manifest& manifest) {
     }
 
     out.flush();
-    if (out.rdbuf()->pubsync() != 0) {
-      throw std::runtime_error("MANIFEST sync failed: " + tmp_path);
+    if (!out) {
+      throw std::runtime_error("MANIFEST flush failed: " + tmp_path);
     }
   }
+
+  // The temporary file's contents must be on the media before the rename
+  // installs it. Renaming first would let a crash publish a MANIFEST whose
+  // bytes never landed, which is worse than keeping the previous one.
+  durability::SyncPath(tmp_path);
 
   std::error_code ec;
   fs::rename(tmp_path, path, ec);
   if (ec) {
     throw std::runtime_error("failed to install MANIFEST: " + path);
   }
+
+  // rename() is atomic but the directory entry it rewrote is still only in the
+  // page cache; without this the install itself can be lost.
+  durability::SyncDir(data_dir);
 }
 
 }  // namespace lsm

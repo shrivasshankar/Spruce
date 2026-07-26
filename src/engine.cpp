@@ -1,5 +1,7 @@
 #include "lsm/engine.h"
 
+#include "lsm/durability.h"
+
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -142,9 +144,28 @@ std::size_t LSMEngine::VerticalIndexFromManifestLevel(std::uint32_t level) const
   return static_cast<std::size_t>(level - levels_.size());
 }
 
+void LSMEngine::MaybeSyncWal() {
+  ++writes_since_wal_sync_;
+  switch (cfg_.wal_sync_policy) {
+    case WalSyncPolicy::EveryWrite:
+      break;
+    case WalSyncPolicy::EveryN:
+      if (writes_since_wal_sync_ < cfg_.wal_sync_interval) {
+        return;
+      }
+      break;
+    case WalSyncPolicy::Never:
+      // Records still reach the kernel, so a process crash is survivable; a
+      // power loss is not. Everything since the last Flush() can be lost.
+      return;
+  }
+  wal_.Sync();
+  writes_since_wal_sync_ = 0;
+}
+
 void LSMEngine::Put(std::string key, std::string value) {
   wal_.AppendPut(key, value);
-  wal_.Sync();
+  MaybeSyncWal();
   memtable_.Put(std::move(key), std::move(value));
   MaybeFlush();
 }
@@ -190,7 +211,7 @@ std::optional<std::optional<std::string>> LSMEngine::Get(std::string_view key) c
 
 void LSMEngine::Delete(std::string key) {
   wal_.AppendDelete(key);
-  wal_.Sync();
+  MaybeSyncWal();
   memtable_.Delete(std::move(key));
   MaybeFlush();
 }
@@ -238,10 +259,15 @@ void LSMEngine::Flush() {
       throw std::runtime_error("SST flush failed: " + path);
     }
     out.flush();
-    if (out.rdbuf()->pubsync() != 0) {
+    if (!out) {
       throw std::runtime_error("SST sync failed: " + path);
     }
   }
+
+  // The SST is a durability boundary: the WAL is only safe to truncate once
+  // these bytes, and the directory entry naming them, are on the media.
+  durability::SyncPath(path);
+  durability::SyncDir(cfg_.data_dir);
 
   Run run;
   run.files.push_back(
@@ -260,11 +286,18 @@ void LSMEngine::Flush() {
   // The new MANIFEST no longer references the absorbed SSTs, so it is now
   // safe to delete them. Doing this before SaveManifest would let a crash
   // strand a MANIFEST that points at missing files.
+  bool removed_any = false;
   for (const auto& rel_path : pending_sst_removals_) {
     std::error_code ec;
-    fs::remove(fs::path(cfg_.data_dir) / rel_path, ec);
+    if (fs::remove(fs::path(cfg_.data_dir) / rel_path, ec)) {
+      removed_any = true;
+    }
   }
   pending_sst_removals_.clear();
+  if (removed_any) {
+    // Persist the unlinks, so recovery cannot see files the MANIFEST dropped.
+    durability::SyncDir(cfg_.data_dir);
+  }
 
   wal_.Truncate();
 }
@@ -321,10 +354,15 @@ void LSMEngine::CompactHorizontalLevel(std::size_t level_idx) {
       throw std::runtime_error("SST compaction failed: " + path);
     }
     out.flush();
-    if (out.rdbuf()->pubsync() != 0) {
+    if (!out) {
       throw std::runtime_error("SST compaction sync failed: " + path);
     }
   }
+
+  // The SST is a durability boundary: the WAL is only safe to truncate once
+  // these bytes, and the directory entry naming them, are on the media.
+  durability::SyncPath(path);
+  durability::SyncDir(cfg_.data_dir);
 
   Run new_run;
   new_run.files.push_back(std::make_unique<SSTable>(SSTable::Open(path)));
@@ -380,10 +418,15 @@ void LSMEngine::CompactHorizontalToVertical() {
       throw std::runtime_error("horizontal->vertical SST write failed: " + path);
     }
     out.flush();
-    if (out.rdbuf()->pubsync() != 0) {
+    if (!out) {
       throw std::runtime_error("horizontal->vertical SST sync failed: " + path);
     }
   }
+
+  // The SST is a durability boundary: the WAL is only safe to truncate once
+  // these bytes, and the directory entry naming them, are on the media.
+  durability::SyncPath(path);
+  durability::SyncDir(cfg_.data_dir);
 
   Run new_run;
   new_run.files.push_back(std::make_unique<SSTable>(SSTable::Open(path)));
@@ -540,10 +583,15 @@ void LSMEngine::CompactVerticalPartial() {
       throw std::runtime_error("vertical compaction SST write failed: " + path);
     }
     out.flush();
-    if (out.rdbuf()->pubsync() != 0) {
+    if (!out) {
       throw std::runtime_error("vertical compaction SST sync failed: " + path);
     }
   }
+
+  // The SST is a durability boundary: the WAL is only safe to truncate once
+  // these bytes, and the directory entry naming them, are on the media.
+  durability::SyncPath(path);
+  durability::SyncDir(cfg_.data_dir);
 
   Run new_run;
   new_run.files.push_back(std::make_unique<SSTable>(SSTable::Open(path)));
